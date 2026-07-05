@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Shop 管理端</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles/portal.css">
+</head>
+<body class="portal-body admin-body">
+  <header class="band admin-band">
+    <div class="container masthead-grid">
+      <div class="brand-copy">
+        <span class="eyebrow">AI Commerce Admin</span>
+        <h1>AI Shop 管理端</h1>
+        <p>集中管理商品、订单、知识库和用户，同时保留电商 AI 客服所依赖的业务数据。</p>
+      </div>
+      <div class="auth-box">
+        <div id="adminStatus" class="status-chip">等待管理员登录</div>
+        <div class="auth-fields">
+          <input id="adminUsername" type="text" placeholder="管理员账号">
+          <input id="adminPassword" type="password" placeholder="管理员密码">
+          <button id="adminLoginBtn" type="button" class="primary">登录</button>
+          <button id="adminLogoutBtn" type="button" class="ghost">退出</button>
+        </div>
+        <div class="auth-actions">
+          <button id="fillAdminBtn" type="button" class="secondary">填充 admin 账号</button>
+          <a class="text-link" href="/client/index.html">返回客户端</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="band">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <h2>经营看板</h2>
+            <p>实时查看用户、商品、订单、知识库和待发货数据</p>
+          </div>
+          <button id="refreshDashboardBtn" type="button" class="ghost">刷新看板</button>
+        </div>
+        <div id="metricGrid" class="metric-grid"></div>
+      </div>
+    </section>
+
+    <section class="band muted-band">
+      <div class="container split-grid">
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>商品管理</h2>
+              <p>维护前台展示和 AI 推荐会使用的商品数据</p>
+            </div>
+          </div>
+          <div id="adminProductList" class="table-list"></div>
+        </section>
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2 id="productFormTitle">新增商品</h2>
+              <p>图片、价格、分类、库存都会直接影响客户端和 AI 客服</p>
+            </div>
+          </div>
+          <form id="productForm" class="form-grid">
+            <input id="productSku" type="text" placeholder="SKU">
+            <input id="productName" type="text" placeholder="商品名称">
+            <input id="productCategory" type="text" placeholder="分类名称">
+            <input id="productPrice" type="number" min="0" step="0.01" placeholder="价格">
+            <input id="productStock" type="number" min="0" step="1" placeholder="库存">
+            <input id="productImageUrl" type="url" placeholder="图片 URL">
+            <textarea id="productDescription" placeholder="商品描述"></textarea>
+            <div class="form-actions">
+              <button id="saveProductBtn" type="submit" class="primary">保存商品</button>
+              <button id="resetProductBtn" type="button" class="ghost">重置表单</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <h2>订单管理</h2>
+            <p>支持查看下单明细并推进订单状态</p>
+          </div>
+        </div>
+        <div id="adminOrdersList" class="table-list"></div>
+      </div>
+    </section>
+
+    <section class="band muted-band">
+      <div class="container split-grid">
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>知识库管理</h2>
+              <p>导入售后、物流、退款、商品知识，供 AI 客服检索</p>
+            </div>
+          </div>
+          <form id="knowledgeForm" class="form-grid">
+            <input id="knowledgeTitle" type="text" placeholder="知识标题">
+            <input id="knowledgeType" type="text" placeholder="知识类型，例如 faq、policy">
+            <textarea id="knowledgeContent" placeholder="输入知识原文，系统会切块并写入向量库"></textarea>
+            <div class="form-actions">
+              <button id="saveKnowledgeBtn" type="submit" class="primary">导入知识</button>
+            </div>
+          </form>
+        </section>
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>知识文档</h2>
+              <p>这里展示已导入的知识原文摘要</p>
+            </div>
+          </div>
+          <div id="knowledgeDocsList" class="stack-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <h2>用户列表</h2>
+            <p>用于观察前台用户和管理员账号状态</p>
+          </div>
+        </div>
+        <div id="adminUsersList" class="table-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/scripts/admin-app.js"></script>
+</body>
+</html>

@@ -2,6 +2,8 @@ package com.aishop.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 
 @Entity
@@ -25,6 +27,10 @@ public class AppUser extends BaseEntity {
 
     @Column(length = 512)
     private String preferencesSummary;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private UserRole role;
 
     public String getUsername() {
         return username;
@@ -72,5 +78,13 @@ public class AppUser extends BaseEntity {
 
     public void setPreferencesSummary(String preferencesSummary) {
         this.preferencesSummary = preferencesSummary;
+    }
+
+    public UserRole getRole() {
+        return role == null ? UserRole.CUSTOMER : role;
+    }
+
+    public void setRole(UserRole role) {
+        this.role = role;
     }
 }

@@ -8,4 +8,5 @@ import com.aishop.domain.AppUser;
 
 public interface AppUserRepository extends JpaRepository<AppUser, Long> {
     Optional<AppUser> findByUsername(String username);
+    java.util.List<AppUser> findAllByOrderByCreatedAtDesc();
 }

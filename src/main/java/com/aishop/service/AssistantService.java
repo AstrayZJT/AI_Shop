@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.aishop.domain.AppUser;
 import com.aishop.domain.AssistantMessage;
 import com.aishop.domain.AssistantSession;
+import com.aishop.dto.OrderDtos.OrderResponse;
+import com.aishop.dto.ProductDtos.ProductResponse;
 import com.aishop.dto.AssistantDtos.ChatResponse;
 import com.aishop.repository.AssistantMessageRepository;
 import com.aishop.repository.AssistantSessionRepository;
@@ -91,6 +93,8 @@ public class AssistantService {
         }
 
         var intent = detectIntent(message);
+        var matchedProducts = productService.search(message).stream().limit(3).toList();
+        var recentOrders = orderService.listOrders(user).stream().limit(3).toList();
         var sources = knowledgeService.search(message).stream()
                 .map(s -> s.title() + ": " + s.chunkText())
                 .limit(3)
@@ -98,8 +102,8 @@ public class AssistantService {
         log.info("assistant context: sessionId={}, intent={}, sourceCount={}",
                 session.getId(), intent, sources.size());
 
-        var answer = buildAnswer(user, intent, sources, message, currentThreadId);
-        var draftJson = buildDraftIfNeeded(user, intent, currentThreadId);
+        var answer = buildAnswer(user, intent, sources, matchedProducts, recentOrders, message, currentThreadId);
+        var draftJson = buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts);
         log.info("assistant response: sessionId={}, intent={}, draftCreated={}, answer={}",
                 session.getId(), intent, draftJson != null, preview(answer));
 
@@ -122,20 +126,33 @@ public class AssistantService {
         return messageRepository.findBySessionOrderByCreatedAtAsc(session);
     }
 
-    private String buildAnswer(AppUser user, String intent, List<String> sources, String message, String threadId) {
-        if ("order".equals(intent)) {
-            var products = productService.listAll();
-            if (!products.isEmpty()) {
-                var product = products.get(0);
-                return "我已经为你准备了下单草稿，默认推荐商品是：%s，价格 %s。确认后我再帮你真正创建订单。"
+    private String buildAnswer(AppUser user,
+                               String intent,
+                               List<String> sources,
+                               List<ProductResponse> matchedProducts,
+                               List<OrderResponse> recentOrders,
+                               String message,
+                               String threadId) {
+        if ("order".equals(intent) && isOrderLookupIntent(message)) {
+            if (recentOrders.isEmpty()) {
+                return "你当前还没有可查询的订单。你可以先加入购物车结算，或者让我帮你生成一个下单草稿。";
+            }
+            return "我帮你查到了最近的订单：" + formatOrders(recentOrders);
+        }
+        if ("order".equals(intent) && isPurchaseIntent(message)) {
+            var product = matchedProducts.isEmpty() ? productService.listAll().stream().findFirst().orElse(null) : matchedProducts.get(0);
+            if (product != null) {
+                return "我已经为你准备了下单草稿，推荐商品是：%s，价格 %s。你确认后我就继续创建正式订单。"
                         .formatted(product.name(), product.price());
             }
         }
-        if ("product".equals(intent)) {
-            var products = productService.listAll();
-            if (!products.isEmpty()) {
-                return "我先给你推荐这款商品：%s，价格 %s。".formatted(products.get(0).name(), products.get(0).price());
+        if ("product".equals(intent) && !matchedProducts.isEmpty()) {
+            if (matchedProducts.size() == 1) {
+                var product = matchedProducts.get(0);
+                return "我先给你推荐这款商品：%s，价格 %s。%s"
+                        .formatted(product.name(), product.price(), product.description());
             }
+            return "我帮你筛了几款更相关的商品：" + formatProducts(matchedProducts);
         }
 
         var prompt = """
@@ -144,13 +161,17 @@ public class AssistantService {
                 当前对话：%s
                 用户消息：%s
                 意图：%s
+                候选商品：%s
+                最近订单：%s
                 相关知识：%s
-                回答要求：优先结合商品、订单和知识库，不要编造；回答要简洁可用。
+                回答要求：优先结合商品、订单、售后规则和知识库，不要编造；如果用户在问订单，就先根据订单上下文回答；如果用户在问商品，就优先引用候选商品；回答要简洁、明确、像客服。
                 """.formatted(
                 user.getDisplayName(),
                 threadId,
                 message,
                 intent,
+                matchedProducts.isEmpty() ? "无" : formatProducts(matchedProducts),
+                recentOrders.isEmpty() ? "无" : formatOrders(recentOrders),
                 sources.isEmpty() ? "无" : String.join(" | ", sources));
 
         try {
@@ -160,15 +181,21 @@ public class AssistantService {
         }
     }
 
-    private String buildDraftIfNeeded(AppUser user, String intent, String threadId) {
-        if (!"order".equals(intent)) {
+    private String buildDraftIfNeeded(AppUser user,
+                                      String intent,
+                                      String threadId,
+                                      String message,
+                                      List<ProductResponse> matchedProducts) {
+        if (!"order".equals(intent) || !isPurchaseIntent(message)) {
             return null;
         }
-        var products = productService.listAll();
-        if (products.isEmpty()) {
+        ProductResponse product = matchedProducts.isEmpty()
+                ? productService.listAll().stream().findFirst().orElse(null)
+                : matchedProducts.get(0);
+        if (product == null) {
             return null;
         }
-        return orderService.buildDraft(user, products.get(0).id(), 1, threadId).draftJson();
+        return orderService.buildDraft(user, product.id(), 1, threadId).draftJson();
     }
 
     private String composeSummary(String current, String userMessage, String answer) {
@@ -200,15 +227,39 @@ public class AssistantService {
 
     private String detectIntent(String message) {
         var text = message == null ? "" : message.toLowerCase();
-        if (text.contains("下单") || text.contains("买") || text.contains("结算")) {
+        if (text.contains("下单") || text.contains("买") || text.contains("结算") || text.contains("订单") || text.contains("物流") || text.contains("发货")) {
             return "order";
         }
-        if (text.contains("推荐") || text.contains("商品")) {
+        if (text.contains("推荐") || text.contains("商品") || text.contains("手机") || text.contains("耳机") || text.contains("平板")) {
             return "product";
         }
-        if (text.contains("faq") || text.contains("售后") || text.contains("规则") || text.contains("退款")) {
+        if (text.contains("faq") || text.contains("售后") || text.contains("规则") || text.contains("退款") || text.contains("退货") || text.contains("保修")) {
             return "rag";
         }
         return "chat";
+    }
+
+    private boolean isPurchaseIntent(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        return text.contains("下单") || text.contains("购买") || text.contains("买") || text.contains("来一单") || text.contains("结算");
+    }
+
+    private boolean isOrderLookupIntent(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        return text.contains("订单") || text.contains("物流") || text.contains("发货") || text.contains("状态") || text.contains("到哪");
+    }
+
+    private String formatProducts(List<ProductResponse> products) {
+        return products.stream()
+                .map(product -> "%s(%s, 库存%s)".formatted(product.name(), product.price(), product.stock()))
+                .reduce((left, right) -> left + " | " + right)
+                .orElse("无");
+    }
+
+    private String formatOrders(List<OrderResponse> orders) {
+        return orders.stream()
+                .map(order -> "%s[%s, %s]".formatted(order.orderNo(), order.status(), order.totalAmount()))
+                .reduce((left, right) -> left + " | " + right)
+                .orElse("无");
     }
 }

@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.aishop.dto.ProductDtos.CategoryResponse;
 import com.aishop.dto.ProductDtos.ProductResponse;
 import com.aishop.service.ProductService;
 
@@ -32,5 +33,10 @@ public class ProductController {
     @GetMapping("/api/products/search")
     public List<ProductResponse> search(@RequestParam String keyword) {
         return productService.search(keyword);
+    }
+
+    @GetMapping("/api/categories")
+    public List<CategoryResponse> categories() {
+        return productService.categories();
     }
 }

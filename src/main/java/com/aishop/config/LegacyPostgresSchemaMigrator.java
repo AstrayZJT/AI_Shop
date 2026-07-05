@@ -60,6 +60,8 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
             checkedTables++;
         }
 
+        ensureOrderStatusConstraint();
+
         log.info("Checked PostgreSQL audit columns for {} tables", checkedTables);
     }
 
@@ -83,5 +85,26 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
                 "UPDATE " + tableName + " SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
         jdbcTemplate.execute("ALTER TABLE " + tableName + " ALTER COLUMN created_at SET NOT NULL");
         jdbcTemplate.execute("ALTER TABLE " + tableName + " ALTER COLUMN updated_at SET NOT NULL");
+    }
+
+    private void ensureOrderStatusConstraint() {
+        if (!tableExists("orders")) {
+            return;
+        }
+        jdbcTemplate.execute("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check");
+        jdbcTemplate.execute("""
+                ALTER TABLE orders
+                ADD CONSTRAINT orders_status_check
+                CHECK (status IN (
+                    'DRAFT',
+                    'PENDING_CONFIRMATION',
+                    'CONFIRMED',
+                    'PROCESSING',
+                    'SHIPPED',
+                    'COMPLETED',
+                    'REFUND_REQUESTED',
+                    'CANCELLED'
+                ))
+                """);
     }
 }

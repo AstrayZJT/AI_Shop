@@ -6,5 +6,12 @@ public final class AuthDtos {
 
     public record RegisterRequest(String username, String password, String displayName) {}
     public record LoginRequest(String username, String password) {}
-    public record UserResponse(Long id, String username, String displayName, String phone, String shippingAddress) {}
+    public record UpdateProfileRequest(String displayName, String phone, String shippingAddress, String preferencesSummary) {}
+    public record UserResponse(Long id,
+                               String username,
+                               String displayName,
+                               String phone,
+                               String shippingAddress,
+                               String preferencesSummary,
+                               String role) {}
 }

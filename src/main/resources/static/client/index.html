@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Shop 客户端</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles/portal.css">
+</head>
+<body class="portal-body">
+  <header class="band masthead-band">
+    <div class="container masthead-grid">
+      <div class="brand-copy">
+        <span class="eyebrow">AI Commerce Client</span>
+        <h1>AI Shop 客户端</h1>
+        <p>商品浏览、购物车、订单跟踪和 AI 客服整合在同一套前端里，全部通过 API 驱动。</p>
+      </div>
+      <div class="auth-box">
+        <div id="storeStatus" class="status-chip">正在初始化</div>
+        <div class="auth-fields">
+          <input id="loginUsername" type="text" placeholder="用户名">
+          <input id="loginPassword" type="password" placeholder="密码">
+          <button id="loginBtn" type="button" class="primary">登录</button>
+          <button id="registerBtn" type="button" class="ghost">注册</button>
+          <button id="logoutBtn" type="button" class="ghost">退出</button>
+        </div>
+        <div class="auth-actions">
+          <button id="demoAccountBtn" type="button" class="secondary">填充演示账号</button>
+          <a class="text-link" href="/admin/index.html">进入管理端</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="band toolbar-band">
+    <div class="container toolbar-row">
+      <div class="search-cluster">
+        <input id="searchInput" type="text" placeholder="搜索商品、场景、关键词">
+        <button id="searchBtn" type="button" class="primary">搜索</button>
+      </div>
+      <div id="categoryTabs" class="segmented"></div>
+    </div>
+  </section>
+
+  <main>
+    <section class="band">
+      <div class="container storefront-grid">
+        <div class="catalog-area">
+          <div class="section-head">
+            <div>
+              <h2>商品目录</h2>
+              <p id="productMeta">正在加载商品</p>
+            </div>
+          </div>
+          <div id="productGrid" class="product-grid"></div>
+        </div>
+
+        <aside class="utility-rail">
+          <section class="panel rail-panel">
+            <div class="section-head compact">
+              <div>
+                <h2>购物车</h2>
+                <p id="cartSummary">尚未登录</p>
+              </div>
+            </div>
+            <div id="cartItems" class="stack-list"></div>
+            <div class="checkout-box">
+              <input id="shippingAddress" type="text" placeholder="收货地址，可为空">
+              <button id="checkoutBtn" type="button" class="primary wide">提交订单</button>
+            </div>
+          </section>
+
+          <section class="panel rail-panel" id="assistant">
+            <div class="section-head compact">
+              <div>
+                <h2>AI 客服</h2>
+                <p>支持商品咨询、订单查询、售后问答和下单草稿</p>
+              </div>
+              <button id="newSessionBtn" type="button" class="ghost">新会话</button>
+            </div>
+            <div class="quick-prompts">
+              <button type="button" class="prompt-btn" data-prompt="帮我推荐一款适合通勤的商品">推荐商品</button>
+              <button type="button" class="prompt-btn" data-prompt="帮我查询最近订单状态">查询订单</button>
+              <button type="button" class="prompt-btn" data-prompt="退款和售后规则是什么">售后规则</button>
+              <button type="button" class="prompt-btn" data-prompt="帮我生成一个下单草稿">下单草稿</button>
+            </div>
+            <div id="sessionList" class="session-strip"></div>
+            <div id="assistantMessages" class="chat-feed"></div>
+            <textarea id="assistantInput" placeholder="例如：我想买耳机、帮我查订单、退货规则是什么"></textarea>
+            <div class="composer-actions">
+              <button id="assistantSendBtn" type="button" class="primary">发送消息</button>
+            </div>
+            <div id="assistantMeta" class="assistant-meta"></div>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <section class="band muted-band">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <h2>我的订单</h2>
+            <p>从购物车结算和 AI 下单草稿生成的订单都会汇总在这里</p>
+          </div>
+          <button id="refreshOrdersBtn" type="button" class="ghost">刷新订单</button>
+        </div>
+        <div id="ordersList" class="orders-grid"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/scripts/client-app.js"></script>
+</body>
+</html>

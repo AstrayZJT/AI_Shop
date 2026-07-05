@@ -22,7 +22,11 @@ public class EmbeddingStoreConfig {
     @Bean
     EmbeddingStoreFacade embeddingStoreFacade(DataSource dataSource,
                                               EmbeddingModel embeddingModel,
-                                              RagProperties ragProperties) throws SQLException {
+                                              RagProperties ragProperties,
+                                              ShopProperties shopProperties) throws SQLException {
+        if (!shopProperties.ai().enabled()) {
+            return new InMemoryEmbeddingStoreFacade();
+        }
         DataSource vectorDataSource = resolveVectorDataSource(dataSource, ragProperties);
         if (isPostgres(vectorDataSource)) {
             return new PgVectorEmbeddingStoreFacade(vectorDataSource, embeddingModel, ragProperties);

@@ -11,4 +11,5 @@ import com.aishop.domain.ShopOrder;
 public interface ShopOrderRepository extends JpaRepository<ShopOrder, Long> {
     Optional<ShopOrder> findByOrderNo(String orderNo);
     List<ShopOrder> findByUserOrderByCreatedAtDesc(AppUser user);
+    List<ShopOrder> findAllByOrderByCreatedAtDesc();
 }

@@ -31,19 +31,13 @@ public class AssistantController {
 
     @PostMapping("/api/assistant/chat")
     public ChatResponse chat(HttpSession session, @RequestBody ChatRequest request) {
-        var user = authService.currentUser(session);
-        if (user == null) {
-            throw new IllegalArgumentException("请先登录");
-        }
+        var user = authService.requireUser(session);
         return assistantService.chat(user, request.sessionId(), request.message(), request.threadId());
     }
 
     @GetMapping("/api/assistant/sessions")
     public List<SessionResponse> sessions(HttpSession session) {
-        var user = authService.currentUser(session);
-        if (user == null) {
-            throw new IllegalArgumentException("请先登录");
-        }
+        var user = authService.requireUser(session);
         return assistantService.listSessions(user).stream()
                 .map(s -> new SessionResponse(s.getId(), s.getTitle(), s.getSummary(), s.getLastIntent()))
                 .toList();
@@ -51,30 +45,21 @@ public class AssistantController {
 
     @PostMapping("/api/assistant/sessions")
     public CreateSessionResponse createSession(HttpSession session) {
-        var user = authService.currentUser(session);
-        if (user == null) {
-            throw new IllegalArgumentException("请先登录");
-        }
+        var user = authService.requireUser(session);
         var created = assistantService.createSession(user);
         return new CreateSessionResponse(created.getId(), created.getTitle(), created.getSummary(), created.getLastIntent());
     }
 
     @GetMapping("/api/assistant/sessions/{id}")
     public SessionResponse session(@PathVariable Long id, HttpSession session) {
-        var user = authService.currentUser(session);
-        if (user == null) {
-            throw new IllegalArgumentException("请先登录");
-        }
+        var user = authService.requireUser(session);
         var s = assistantService.getOrCreateSession(user, id);
         return new SessionResponse(s.getId(), s.getTitle(), s.getSummary(), s.getLastIntent());
     }
 
     @GetMapping("/api/assistant/sessions/{id}/messages")
     public List<MessageResponse> messages(@PathVariable Long id, HttpSession session) {
-        var user = authService.currentUser(session);
-        if (user == null) {
-            throw new IllegalArgumentException("请先登录");
-        }
+        var user = authService.requireUser(session);
         return assistantService.messages(id, user).stream()
                 .map(m -> new MessageResponse(m.getRole(), m.getContent()))
                 .toList();

@@ -51,10 +51,7 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public OrderResponse detail(AppUser user, Long id) {
-        var order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
-        if (!order.getUser().getId().equals(user.getId())) {
-            throw new IllegalArgumentException("无权访问该订单");
-        }
+        var order = requireOwnedOrder(user, id);
         return toResponse(order);
     }
 
@@ -84,6 +81,9 @@ public class OrderService {
         }
 
         DraftPayload payload = parseDraft(draft.getDraftJson());
+        Product product = productService.getProduct(payload.productId());
+        productService.decreaseStock(product, payload.quantity());
+
         var order = new ShopOrder();
         order.setOrderNo("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         order.setUser(user);
@@ -106,6 +106,64 @@ public class OrderService {
         return order;
     }
 
+    @Transactional(readOnly = true)
+    public ShopOrder getOrderEntity(Long id) {
+        return orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+    }
+
+    @Transactional(readOnly = true)
+    public List<OrderResponse> listAllOrders() {
+        return orderRepository.findAllByOrderByCreatedAtDesc().stream().map(this::toResponse).toList();
+    }
+
+    @Transactional
+    public OrderResponse updateStatus(Long id, String rawStatus) {
+        ShopOrder order = getOrderEntity(id);
+        try {
+            order.setStatus(OrderStatus.valueOf(rawStatus));
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("不支持的订单状态: " + rawStatus);
+        }
+        orderRepository.save(order);
+        return toResponse(order);
+    }
+
+    @Transactional
+    public OrderResponse cancelOrder(AppUser user, Long id, String note) {
+        ShopOrder order = requireOwnedOrder(user, id);
+        if (!(order.getStatus() == OrderStatus.CONFIRMED || order.getStatus() == OrderStatus.PROCESSING)) {
+            throw new IllegalArgumentException("当前订单状态不支持取消");
+        }
+        order.setStatus(OrderStatus.CANCELLED);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户取消订单", note));
+        orderRepository.save(order);
+        return toResponse(order);
+    }
+
+    @Transactional
+    public OrderResponse confirmReceipt(AppUser user, Long id) {
+        ShopOrder order = requireOwnedOrder(user, id);
+        if (order.getStatus() != OrderStatus.SHIPPED) {
+            throw new IllegalArgumentException("只有已发货订单才能确认收货");
+        }
+        order.setStatus(OrderStatus.COMPLETED);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户确认收货", null));
+        orderRepository.save(order);
+        return toResponse(order);
+    }
+
+    @Transactional
+    public OrderResponse requestRefund(AppUser user, Long id, String note) {
+        ShopOrder order = requireOwnedOrder(user, id);
+        if (!(order.getStatus() == OrderStatus.SHIPPED || order.getStatus() == OrderStatus.COMPLETED)) {
+            throw new IllegalArgumentException("当前订单状态不支持申请退款");
+        }
+        order.setStatus(OrderStatus.REFUND_REQUESTED);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户发起退款申请", note));
+        orderRepository.save(order);
+        return toResponse(order);
+    }
+
     private DraftPayload parseDraft(String draftJson) {
         var matcher = DRAFT_PATTERN.matcher(draftJson == null ? "" : draftJson);
         if (!matcher.find()) {
@@ -119,11 +177,27 @@ public class OrderService {
         return new DraftPayload(productId, productName, quantity, unitPrice, totalAmount);
     }
 
-    private OrderResponse toResponse(ShopOrder order) {
+    public OrderResponse toResponse(ShopOrder order) {
         var items = orderItemRepository.findByOrder(order).stream()
                 .map(item -> new OrderItemResponse(item.getProductName(), item.getQuantity(), item.getUnitPrice(), item.getLineTotal()))
                 .toList();
         return new OrderResponse(order.getId(), order.getOrderNo(), order.getStatus().name(), order.getTotalAmount(), order.getShippingAddress(), order.getRiskNote(), items);
+    }
+
+    private ShopOrder requireOwnedOrder(AppUser user, Long id) {
+        var order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        if (!order.getUser().getId().equals(user.getId())) {
+            throw new IllegalArgumentException("无权访问该订单");
+        }
+        return order;
+    }
+
+    private String appendRiskNote(String current, String action, String note) {
+        String suffix = note == null || note.isBlank() ? action : action + "：" + note.trim();
+        if (current == null || current.isBlank()) {
+            return suffix;
+        }
+        return current + " | " + suffix;
     }
 
     private record DraftPayload(Long productId, String productName, Integer quantity, BigDecimal unitPrice, BigDecimal totalAmount) {}

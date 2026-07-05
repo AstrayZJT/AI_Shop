@@ -17,7 +17,7 @@ public class InMemoryEmbeddingStoreFacade implements EmbeddingStoreFacade {
 
     @Override
     public void upsert(String id, Embedding embedding, TextSegment segment) {
-        entries.put(id, new Entry(embedding, segment));
+        entries.put(id, new Entry(id, embedding, segment));
     }
 
     @Override
@@ -26,7 +26,7 @@ public class InMemoryEmbeddingStoreFacade implements EmbeddingStoreFacade {
         var matches = entries.values().stream()
                 .map(entry -> new EmbeddingMatch<>(
                         similarity(query.vector(), entry.embedding.vector()),
-                        null,
+                        entry.id,
                         entry.embedding,
                         entry.segment))
                 .filter(match -> match.score() >= request.minScore())
@@ -63,6 +63,6 @@ public class InMemoryEmbeddingStoreFacade implements EmbeddingStoreFacade {
         return denominator == 0.0 ? 0.0 : dot / denominator;
     }
 
-    private record Entry(Embedding embedding, TextSegment segment) {
+    private record Entry(String id, Embedding embedding, TextSegment segment) {
     }
 }

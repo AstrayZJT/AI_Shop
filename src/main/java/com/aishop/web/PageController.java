@@ -8,11 +8,21 @@ public class PageController {
 
     @GetMapping({"/", "/index.html"})
     public String index() {
-        return "index";
+        return "redirect:/client/index.html";
     }
 
     @GetMapping("/assistant.html")
     public String assistant() {
-        return "assistant";
+        return "redirect:/client/index.html#assistant";
+    }
+
+    @GetMapping("/admin")
+    public String admin() {
+        return "redirect:/admin/index.html";
+    }
+
+    @GetMapping("/client")
+    public String client() {
+        return "redirect:/client/index.html";
     }
 }
