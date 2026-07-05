@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Shop Assistant</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles/app.css">
+</head>
+<body>
+  <main class="shell assistant-shell">
+    <section class="topbar">
+      <div>
+        <h1>AI Shop Assistant</h1>
+        <p>Sign in, start a chat, review order drafts, and track sessions.</p>
+      </div>
+      <div class="auth-row">
+        <input id="username" type="text" placeholder="Username" autocomplete="username">
+        <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+        <button id="loginBtn" type="button">Login</button>
+        <button id="logoutBtn" type="button" class="secondary">Logout</button>
+      </div>
+    </section>
+
+    <section class="assistant-layout">
+      <aside class="sidebar panel">
+        <div class="sidebar-head">
+          <h2>Sessions</h2>
+          <button id="newSessionBtn" type="button" class="secondary">New</button>
+        </div>
+        <div id="sessionList" class="session-list"></div>
+      </aside>
+
+      <section class="chat panel">
+        <div id="status" class="status">Not signed in</div>
+        <div id="messages" class="message-list" aria-live="polite"></div>
+        <div class="composer">
+          <textarea id="msg" placeholder="Ask about products, orders, or support rules"></textarea>
+          <div class="composer-actions">
+            <label class="inline">
+              <input id="remember" type="checkbox" checked>
+              Keep session context
+            </label>
+            <button id="send" type="button">Send</button>
+          </div>
+        </div>
+        <pre id="output" class="output"></pre>
+      </section>
+    </section>
+  </main>
+  <script src="/scripts/app.js"></script>
+</body>
+</html>
