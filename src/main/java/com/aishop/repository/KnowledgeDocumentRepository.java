@@ -8,4 +8,5 @@ import com.aishop.domain.KnowledgeDocument;
 
 public interface KnowledgeDocumentRepository extends JpaRepository<KnowledgeDocument, Long> {
     List<KnowledgeDocument> findAllByOrderByCreatedAtDesc();
+    boolean existsByTitle(String title);
 }

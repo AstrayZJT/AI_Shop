@@ -64,6 +64,22 @@ public class ProductService {
     }
 
     @Transactional
+    public void increaseStock(Product product, int quantity) {
+        int safeQuantity = Math.max(1, quantity);
+        product.setStock(product.getStock() + safeQuantity);
+        productRepository.save(product);
+    }
+
+    @Transactional
+    public void increaseStockBySku(String sku, int quantity) {
+        if (sku == null || sku.isBlank()) {
+            return;
+        }
+        productRepository.findBySku(sku.trim())
+                .ifPresent(product -> increaseStock(product, quantity));
+    }
+
+    @Transactional
     public ProductCategory getOrCreateCategory(String name, String description) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("分类名称不能为空");

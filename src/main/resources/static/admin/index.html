@@ -85,7 +85,7 @@
         <div class="section-head">
           <div>
             <h2>订单管理</h2>
-            <p>支持查看下单明细并推进订单状态</p>
+            <p>支持推进订单履约状态、处理退款申请，并保留运营审核备注</p>
           </div>
         </div>
         <div id="adminOrdersList" class="table-list"></div>
@@ -114,8 +114,15 @@
           <div class="section-head compact">
             <div>
               <h2>知识文档</h2>
-              <p>这里展示已导入的知识原文摘要</p>
+              <p>这里既能看原文摘要，也能直接测试向量检索召回效果</p>
             </div>
+          </div>
+          <div class="knowledge-search-block">
+            <div class="search-cluster">
+              <input id="knowledgeSearchInput" type="text" placeholder="输入退款、物流、保修、通勤等关键词">
+              <button id="knowledgeSearchBtn" type="button" class="secondary">检索知识</button>
+            </div>
+            <div id="knowledgeSearchResults" class="stack-list"></div>
           </div>
           <div id="knowledgeDocsList" class="stack-list"></div>
         </section>

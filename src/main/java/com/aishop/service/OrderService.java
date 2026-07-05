@@ -15,6 +15,7 @@ import com.aishop.domain.OrderStatus;
 import com.aishop.domain.PendingOrderDraft;
 import com.aishop.domain.Product;
 import com.aishop.domain.ShopOrder;
+import com.aishop.dto.OrderDtos.PendingOrderDraftResponse;
 import com.aishop.dto.OrderDtos.OrderDraftResponse;
 import com.aishop.dto.OrderDtos.OrderItemResponse;
 import com.aishop.dto.OrderDtos.OrderResponse;
@@ -26,7 +27,7 @@ import com.aishop.repository.ShopOrderRepository;
 public class OrderService {
 
     private static final Pattern DRAFT_PATTERN = Pattern.compile(
-            "\\\"productId\\\":(?<productId>\\d+),\\\"productName\\\":\\\"(?<productName>.*?)\\\",\\\"quantity\\\":(?<quantity>\\d+),\\\"unitPrice\\\":(?<unitPrice>[-\\d.]+),\\\"totalAmount\\\":(?<totalAmount>[-\\d.]+)"
+            "\\\"productId\\\":(?<productId>\\d+),\\\"productName\\\":\\\"(?<productName>.*?)\\\",\\\"quantity\\\":(?<quantity>\\d+),\\\"unitPrice\\\":(?<unitPrice>[-\\d.]+),\\\"totalAmount\\\":(?<totalAmount>[-\\d.]+),\\\"note\\\":\\\"(?<note>.*?)\\\""
     );
 
     private final ShopOrderRepository orderRepository;
@@ -55,6 +56,19 @@ public class OrderService {
         return toResponse(order);
     }
 
+    @Transactional(readOnly = true)
+    public OrderResponse findByOrderNo(AppUser user, String orderNo) {
+        if (orderNo == null || orderNo.isBlank()) {
+            return null;
+        }
+        var order = orderRepository.findByOrderNo(orderNo.trim())
+                .orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        if (!order.getUser().getId().equals(user.getId())) {
+            throw new IllegalArgumentException("无权访问该订单");
+        }
+        return toResponse(order);
+    }
+
     @Transactional
     public OrderDraftResponse buildDraft(AppUser user, Long productId, Integer quantity, String threadId) {
         Product product = productService.getProduct(productId);
@@ -72,12 +86,26 @@ public class OrderService {
         return new OrderDraftResponse(draft.getThreadId(), draft.getDraftJson(), draft.getStatus());
     }
 
+    @Transactional(readOnly = true)
+    public PendingOrderDraftResponse latestDraft(AppUser user, String threadId) {
+        if (threadId == null || threadId.isBlank()) {
+            return null;
+        }
+        return draftRepository.findTop1ByThreadIdAndUserIdOrderByCreatedAtDesc(threadId.trim(), user.getId())
+                .filter(draft -> "PENDING_CONFIRMATION".equalsIgnoreCase(draft.getStatus()))
+                .map(this::toDraftResponse)
+                .orElse(null);
+    }
+
     @Transactional
-    public ShopOrder confirmDraft(AppUser user, String threadId) {
+    public OrderResponse confirmDraft(AppUser user, String threadId) {
         var draft = draftRepository.findTop1ByThreadIdOrderByCreatedAtDesc(threadId)
                 .orElseThrow(() -> new IllegalArgumentException("未找到订单草稿"));
         if (!draft.getUser().getId().equals(user.getId())) {
             throw new IllegalArgumentException("无权确认该草稿");
+        }
+        if (!"PENDING_CONFIRMATION".equalsIgnoreCase(draft.getStatus())) {
+            throw new IllegalArgumentException("当前草稿已失效，请重新生成");
         }
 
         DraftPayload payload = parseDraft(draft.getDraftJson());
@@ -96,6 +124,7 @@ public class OrderService {
         var item = new OrderItem();
         item.setOrder(order);
         item.setProductName(payload.productName());
+        item.setProductSku(product.getSku());
         item.setQuantity(payload.quantity());
         item.setUnitPrice(payload.unitPrice());
         item.setLineTotal(payload.totalAmount());
@@ -103,7 +132,22 @@ public class OrderService {
 
         draft.setStatus("CONFIRMED");
         draftRepository.save(draft);
-        return order;
+        return toResponse(order);
+    }
+
+    @Transactional
+    public PendingOrderDraftResponse cancelDraft(AppUser user, String threadId) {
+        if (threadId == null || threadId.isBlank()) {
+            throw new IllegalArgumentException("缺少草稿标识");
+        }
+        var draft = draftRepository.findTop1ByThreadIdAndUserIdOrderByCreatedAtDesc(threadId.trim(), user.getId())
+                .orElseThrow(() -> new IllegalArgumentException("未找到订单草稿"));
+        if (!"PENDING_CONFIRMATION".equalsIgnoreCase(draft.getStatus())) {
+            throw new IllegalArgumentException("当前草稿已无法取消");
+        }
+        draft.setStatus("CANCELLED");
+        draftRepository.save(draft);
+        return toDraftResponse(draft);
     }
 
     @Transactional(readOnly = true)
@@ -134,6 +178,7 @@ public class OrderService {
         if (!(order.getStatus() == OrderStatus.CONFIRMED || order.getStatus() == OrderStatus.PROCESSING)) {
             throw new IllegalArgumentException("当前订单状态不支持取消");
         }
+        restoreStockForOrder(order);
         order.setStatus(OrderStatus.CANCELLED);
         order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户取消订单", note));
         orderRepository.save(order);
@@ -174,7 +219,8 @@ public class OrderService {
         Integer quantity = Integer.valueOf(matcher.group("quantity"));
         BigDecimal unitPrice = new BigDecimal(matcher.group("unitPrice"));
         BigDecimal totalAmount = new BigDecimal(matcher.group("totalAmount"));
-        return new DraftPayload(productId, productName, quantity, unitPrice, totalAmount);
+        String note = matcher.group("note");
+        return new DraftPayload(productId, productName, quantity, unitPrice, totalAmount, note);
     }
 
     public OrderResponse toResponse(ShopOrder order) {
@@ -200,5 +246,29 @@ public class OrderService {
         return current + " | " + suffix;
     }
 
-    private record DraftPayload(Long productId, String productName, Integer quantity, BigDecimal unitPrice, BigDecimal totalAmount) {}
+    void restoreStockForOrder(ShopOrder order) {
+        for (OrderItem item : orderItemRepository.findByOrder(order)) {
+            productService.increaseStockBySku(item.getProductSku(), item.getQuantity());
+        }
+    }
+
+    private PendingOrderDraftResponse toDraftResponse(PendingOrderDraft draft) {
+        DraftPayload payload = parseDraft(draft.getDraftJson());
+        return new PendingOrderDraftResponse(
+                draft.getThreadId(),
+                draft.getStatus(),
+                payload.productId(),
+                payload.productName(),
+                payload.quantity(),
+                payload.unitPrice(),
+                payload.totalAmount(),
+                payload.note());
+    }
+
+    private record DraftPayload(Long productId,
+                                String productName,
+                                Integer quantity,
+                                BigDecimal unitPrice,
+                                BigDecimal totalAmount,
+                                String note) {}
 }

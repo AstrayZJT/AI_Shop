@@ -56,7 +56,7 @@ public class AdminService {
     public DashboardMetricResponse dashboard() {
         List<ShopOrder> orders = orderRepository.findAllByOrderByCreatedAtDesc();
         BigDecimal totalRevenue = orders.stream()
-                .filter(order -> order.getStatus() != OrderStatus.CANCELLED)
+                .filter(order -> order.getStatus() != OrderStatus.CANCELLED && order.getStatus() != OrderStatus.REFUNDED)
                 .map(ShopOrder::getTotalAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         long pendingShipmentCount = orders.stream()
@@ -100,12 +100,36 @@ public class AdminService {
     }
 
     @Transactional
-    public AdminOrderResponse updateOrderStatus(Long id, String rawStatus) {
+    public AdminOrderResponse updateOrderStatus(Long id, String rawStatus, String note) {
         ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
-        try {
-            order.setStatus(OrderStatus.valueOf(rawStatus));
-        } catch (Exception ex) {
-            throw new IllegalArgumentException("不支持的订单状态: " + rawStatus);
+        OrderStatus nextStatus = parseStatus(rawStatus);
+        if (nextStatus == OrderStatus.REFUNDED || order.getStatus() == OrderStatus.REFUND_REQUESTED) {
+            throw new IllegalArgumentException("退款申请请使用售后审核动作处理");
+        }
+        validateStatusTransition(order.getStatus(), nextStatus);
+        if (nextStatus == OrderStatus.CANCELLED && order.getStatus() != OrderStatus.CANCELLED) {
+            restoreStockForOrder(order);
+        }
+        order.setStatus(nextStatus);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员更新状态为" + nextStatus.name(), note));
+        orderRepository.save(order);
+        return toAdminOrderResponse(order);
+    }
+
+    @Transactional
+    public AdminOrderResponse reviewRefund(Long id, Boolean approved, String note) {
+        ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        if (order.getStatus() != OrderStatus.REFUND_REQUESTED) {
+            throw new IllegalArgumentException("当前订单不在退款审核状态");
+        }
+        boolean safeApproved = Boolean.TRUE.equals(approved);
+        if (safeApproved) {
+            restoreStockForOrder(order);
+            order.setStatus(OrderStatus.REFUNDED);
+            order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员同意退款", note));
+        } else {
+            order.setStatus(OrderStatus.COMPLETED);
+            order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员驳回退款", note));
         }
         orderRepository.save(order);
         return toAdminOrderResponse(order);
@@ -164,6 +188,7 @@ public class AdminService {
         List<AdminOrderItemResponse> items = orderItemRepository.findByOrder(order).stream()
                 .map(item -> new AdminOrderItemResponse(
                         item.getProductName(),
+                        item.getProductSku(),
                         item.getQuantity(),
                         item.getUnitPrice(),
                         item.getLineTotal()))
@@ -202,5 +227,50 @@ public class AdminService {
                 user.getPhone(),
                 user.getShippingAddress(),
                 user.getCreatedAt());
+    }
+
+    private OrderStatus parseStatus(String rawStatus) {
+        try {
+            return OrderStatus.valueOf(rawStatus);
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("不支持的订单状态: " + rawStatus);
+        }
+    }
+
+    private void validateStatusTransition(OrderStatus currentStatus, OrderStatus nextStatus) {
+        if (currentStatus == nextStatus) {
+            return;
+        }
+        boolean allowed = switch (currentStatus) {
+            case DRAFT -> nextStatus == OrderStatus.PENDING_CONFIRMATION
+                    || nextStatus == OrderStatus.CONFIRMED
+                    || nextStatus == OrderStatus.CANCELLED;
+            case PENDING_CONFIRMATION -> nextStatus == OrderStatus.CONFIRMED
+                    || nextStatus == OrderStatus.CANCELLED;
+            case CONFIRMED -> nextStatus == OrderStatus.PROCESSING
+                    || nextStatus == OrderStatus.SHIPPED
+                    || nextStatus == OrderStatus.CANCELLED;
+            case PROCESSING -> nextStatus == OrderStatus.SHIPPED
+                    || nextStatus == OrderStatus.CANCELLED;
+            case SHIPPED -> nextStatus == OrderStatus.COMPLETED;
+            case COMPLETED, REFUND_REQUESTED, REFUNDED, CANCELLED -> false;
+        };
+        if (!allowed) {
+            throw new IllegalArgumentException("当前订单状态不支持变更为: " + nextStatus.name());
+        }
+    }
+
+    private String appendRiskNote(String current, String action, String note) {
+        String suffix = note == null || note.isBlank() ? action : action + "：" + note.trim();
+        if (current == null || current.isBlank()) {
+            return suffix;
+        }
+        return current + " | " + suffix;
+    }
+
+    private void restoreStockForOrder(ShopOrder order) {
+        for (var item : orderItemRepository.findByOrder(order)) {
+            productService.increaseStockBySku(item.getProductSku(), item.getQuantity());
+        }
     }
 }

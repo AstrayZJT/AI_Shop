@@ -13,7 +13,7 @@
       <div class="brand-copy">
         <span class="eyebrow">AI Commerce Client</span>
         <h1>AI Shop 客户端</h1>
-        <p>商品浏览、购物车、订单跟踪和 AI 客服整合在同一套前端里，全部通过 API 驱动。</p>
+        <p>把商品浏览、购物车、订单追踪、资料维护和 AI 客服放进同一套前端里，完整体验真实的电商业务流程。</p>
       </div>
       <div class="auth-box">
         <div id="storeStatus" class="status-chip">正在初始化</div>
@@ -65,16 +65,36 @@
             </div>
             <div id="cartItems" class="stack-list"></div>
             <div class="checkout-box">
-              <input id="shippingAddress" type="text" placeholder="收货地址，可为空">
+              <input id="shippingAddress" type="text" placeholder="本次结算地址，可留空">
               <button id="checkoutBtn" type="button" class="primary wide">提交订单</button>
             </div>
+          </section>
+
+          <section class="panel rail-panel">
+            <div class="section-head compact">
+              <div>
+                <h2>我的资料</h2>
+                <p>维护默认收货地址、联系方式和偏好，AI 客服也会参考这些信息。</p>
+              </div>
+            </div>
+            <p id="profileHint" class="panel-hint">登录后可保存常用资料，后续下单会自动带出默认地址。</p>
+            <form id="profileForm" class="form-grid">
+              <input id="profileDisplayName" type="text" placeholder="显示名称">
+              <input id="profilePhone" type="text" placeholder="手机号">
+              <input id="profileShippingAddress" type="text" placeholder="默认收货地址">
+              <textarea id="profilePreferences" placeholder="购物偏好，例如更关注性价比、降噪、轻办公等"></textarea>
+              <div class="form-actions">
+                <button id="saveProfileBtn" type="submit" class="primary">保存资料</button>
+                <button id="syncAddressBtn" type="button" class="ghost">同步到结算地址</button>
+              </div>
+            </form>
           </section>
 
           <section class="panel rail-panel" id="assistant">
             <div class="section-head compact">
               <div>
                 <h2>AI 客服</h2>
-                <p>支持商品咨询、订单查询、售后问答和下单草稿</p>
+                <p>支持商品咨询、订单查询、售后问答、知识库检索和下单草稿生成。</p>
               </div>
               <button id="newSessionBtn" type="button" class="ghost">新会话</button>
             </div>
@@ -86,11 +106,12 @@
             </div>
             <div id="sessionList" class="session-strip"></div>
             <div id="assistantMessages" class="chat-feed"></div>
-            <textarea id="assistantInput" placeholder="例如：我想买耳机、帮我查订单、退货规则是什么"></textarea>
+            <textarea id="assistantInput" placeholder="例如：我想买耳机、帮我查订单、退款规则是什么、怎么改默认地址"></textarea>
             <div class="composer-actions">
               <button id="assistantSendBtn" type="button" class="primary">发送消息</button>
             </div>
             <div id="assistantMeta" class="assistant-meta"></div>
+            <div id="assistantDraft" class="assistant-draft"></div>
           </section>
         </aside>
       </div>
@@ -101,7 +122,7 @@
         <div class="section-head">
           <div>
             <h2>我的订单</h2>
-            <p>从购物车结算和 AI 下单草稿生成的订单都会汇总在这里</p>
+            <p>购物车结算和 AI 生成下单草稿确认后的订单，都会汇总在这里，你也可以直接做取消、收货、退款等动作。</p>
           </div>
           <button id="refreshOrdersBtn" type="button" class="ghost">刷新订单</button>
         </div>

@@ -2,6 +2,7 @@ package com.aishop.service;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
@@ -26,6 +27,10 @@ import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 
 @Service
 public class KnowledgeService {
+
+    private static final List<String> DOMAIN_HINT_TOKENS = List.of(
+            "退款", "退货", "售后", "物流", "发货", "订单", "保修",
+            "通勤", "耳机", "平板", "手机", "规则", "政策", "地址");
 
     private final KnowledgeDocumentRepository documentRepository;
     private final KnowledgeChunkRepository chunkRepository;
@@ -84,10 +89,32 @@ public class KnowledgeService {
 
         Embedding queryEmbedding = embeddingModel.embed(TextSegment.from(keyword)).content();
         LinkedHashMap<Long, KnowledgeChunk> orderedChunks = new LinkedHashMap<>();
+        int targetSize = Math.max(1, properties.rag().topK());
+
+        for (KnowledgeChunk chunk : chunkRepository.findTop10ByChunkTextContainingIgnoreCaseOrderByIdDesc(keyword.trim())) {
+            orderedChunks.putIfAbsent(chunk.getId(), chunk);
+            if (orderedChunks.size() >= targetSize) {
+                break;
+            }
+        }
+
+        if (orderedChunks.size() < targetSize) {
+            for (String token : extractSearchTokens(keyword)) {
+                for (KnowledgeChunk chunk : chunkRepository.findTop10ByChunkTextContainingIgnoreCaseOrderByIdDesc(token)) {
+                    orderedChunks.putIfAbsent(chunk.getId(), chunk);
+                    if (orderedChunks.size() >= targetSize) {
+                        break;
+                    }
+                }
+                if (orderedChunks.size() >= targetSize) {
+                    break;
+                }
+            }
+        }
 
         embeddingStore.search(EmbeddingSearchRequest.builder()
                         .queryEmbedding(queryEmbedding)
-                        .maxResults(Math.max(1, properties.rag().topK()))
+                        .maxResults(targetSize)
                         .minScore(0.15)
                         .build())
                 .matches().stream()
@@ -95,21 +122,7 @@ public class KnowledgeService {
                 .filter(Objects::nonNull)
                 .distinct()
                 .forEach(chunkId -> chunkRepository.findById(chunkId)
-                        .ifPresent(chunk -> orderedChunks.put(chunk.getId(), chunk)));
-
-        if (orderedChunks.size() < Math.max(1, properties.rag().topK())) {
-            for (String token : extractSearchTokens(keyword)) {
-                for (KnowledgeChunk chunk : chunkRepository.findTop10ByChunkTextContainingIgnoreCaseOrderByIdDesc(token)) {
-                    orderedChunks.putIfAbsent(chunk.getId(), chunk);
-                    if (orderedChunks.size() >= Math.max(1, properties.rag().topK())) {
-                        break;
-                    }
-                }
-                if (orderedChunks.size() >= Math.max(1, properties.rag().topK())) {
-                    break;
-                }
-            }
-        }
+                        .ifPresent(chunk -> orderedChunks.putIfAbsent(chunk.getId(), chunk)));
 
         if (orderedChunks.isEmpty()) {
             return List.of();
@@ -117,7 +130,7 @@ public class KnowledgeService {
 
         return orderedChunks.values().stream()
                 .map(chunk -> new SearchResponse(chunk.getId(), chunk.getDocument().getTitle(), chunk.getChunkText()))
-                .limit(Math.max(1, properties.rag().topK()))
+                .limit(targetSize)
                 .toList();
     }
 
@@ -158,10 +171,18 @@ public class KnowledgeService {
     }
 
     private List<String> extractSearchTokens(String keyword) {
-        return Arrays.stream(keyword.toLowerCase(Locale.ROOT).split("[^\\p{IsAlphabetic}\\p{IsDigit}\\u4e00-\\u9fa5]+"))
+        LinkedHashSet<String> tokens = Arrays.stream(keyword.toLowerCase(Locale.ROOT).split("[^\\p{IsAlphabetic}\\p{IsDigit}\\u4e00-\\u9fa5]+"))
                 .map(String::trim)
                 .filter(token -> token.length() >= 2)
                 .distinct()
-                .toList();
+                .collect(LinkedHashSet::new, LinkedHashSet::add, LinkedHashSet::addAll);
+
+        String lowered = keyword.toLowerCase(Locale.ROOT);
+        for (String hint : DOMAIN_HINT_TOKENS) {
+            if (lowered.contains(hint)) {
+                tokens.add(hint);
+            }
+        }
+        return List.copyOf(tokens);
     }
 }

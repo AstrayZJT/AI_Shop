@@ -10,16 +10,23 @@ import com.aishop.domain.AppUser;
 import com.aishop.domain.Product;
 import com.aishop.domain.ProductCategory;
 import com.aishop.domain.UserRole;
+import com.aishop.dto.KnowledgeDtos.ImportRequest;
 import com.aishop.repository.AppUserRepository;
+import com.aishop.repository.KnowledgeDocumentRepository;
 import com.aishop.repository.ProductCategoryRepository;
 import com.aishop.repository.ProductRepository;
+import com.aishop.service.KnowledgeService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 @Configuration
 public class DataInitializer {
 
     @Bean
-    CommandLineRunner seedData(AppUserRepository userRepository, ProductCategoryRepository categoryRepository, ProductRepository productRepository) {
+    CommandLineRunner seedData(AppUserRepository userRepository,
+                               ProductCategoryRepository categoryRepository,
+                               ProductRepository productRepository,
+                               KnowledgeDocumentRepository knowledgeDocumentRepository,
+                               KnowledgeService knowledgeService) {
         return args -> {
             var encoder = new BCryptPasswordEncoder();
 
@@ -87,6 +94,37 @@ public class DataInitializer {
                     "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=900&q=80");
             seedProduct(productRepository, sports, "SPORT-006", "城市通勤跑鞋", "缓震中底和轻量鞋面，适合日常跑步与步行通勤。", "699.00", 40,
                     "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=900&q=80");
+
+            seedKnowledgeDocument(knowledgeDocumentRepository, knowledgeService,
+                    "退款与售后政策",
+                    "policy",
+                    """
+                    1. 已发货订单和已完成订单支持用户在线发起退款申请，需填写退款原因，平台客服会在 24 小时内审核。
+
+                    2. 已确认但尚未发货的订单，用户可直接在线取消；如已进入发货流程，则需要联系平台客服协助处理。
+
+                    3. 数码商品如出现质量问题，支持在签收后 7 天内申请售后，平台会结合订单状态、问题描述和商品情况给出处理方案。
+                    """);
+            seedKnowledgeDocument(knowledgeDocumentRepository, knowledgeService,
+                    "发货与物流说明",
+                    "faq",
+                    """
+                    1. 订单支付或确认后通常会在 24 小时内进入处理阶段，处理完成后更新为已发货。
+
+                    2. 已发货订单支持用户在客户端查看状态，并在收到商品后确认收货。
+
+                    3. 如遇节假日、大促或偏远地区配送，物流时效可能延长，建议结合订单状态和物流节点统一说明。
+                    """);
+            seedKnowledgeDocument(knowledgeDocumentRepository, knowledgeService,
+                    "商品咨询与推荐指引",
+                    "faq",
+                    """
+                    1. AI 客服在推荐商品时应优先参考商品分类、库存、价格和描述，不推荐无库存商品。
+
+                    2. 当用户询问通勤、降噪、轻办公、居家生活等场景时，应优先结合对应商品特点进行推荐。
+
+                    3. 当知识库命中售后或物流规则时，应先引用规则，再结合用户订单状态给出处理建议。
+                    """);
         };
     }
 
@@ -110,5 +148,16 @@ public class DataInitializer {
         product.setCategory(category);
         product.setImageUrl(imageUrl);
         productRepository.save(product);
+    }
+
+    private void seedKnowledgeDocument(KnowledgeDocumentRepository knowledgeDocumentRepository,
+                                       KnowledgeService knowledgeService,
+                                       String title,
+                                       String docType,
+                                       String content) {
+        if (knowledgeDocumentRepository.existsByTitle(title)) {
+            return;
+        }
+        knowledgeService.importDocument(new ImportRequest(title, docType, content));
     }
 }

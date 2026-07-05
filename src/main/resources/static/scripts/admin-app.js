@@ -4,8 +4,22 @@ const adminState = {
   products: [],
   orders: [],
   knowledgeDocs: [],
+  knowledgeMatches: [],
+  knowledgeSearchKeyword: "",
   users: [],
   editingProductId: null,
+};
+
+const ADMIN_STATUS_LABELS = {
+  DRAFT: "草稿",
+  PENDING_CONFIRMATION: "待确认",
+  CONFIRMED: "待发货",
+  PROCESSING: "处理中",
+  SHIPPED: "已发货",
+  COMPLETED: "已完成",
+  REFUND_REQUESTED: "退款审核中",
+  REFUNDED: "已退款",
+  CANCELLED: "已取消",
 };
 
 function adminById(id) {
@@ -22,11 +36,42 @@ async function adminFetchJson(url, options = {}) {
     ...options,
   });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = text ? safeParseJson(text) : null;
   if (!response.ok) {
     throw new Error(data?.error || `HTTP ${response.status}`);
   }
   return data;
+}
+
+function safeParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return { error: text };
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function statusLabel(status) {
+  return ADMIN_STATUS_LABELS[status] || status;
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "时间未知";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 function setAdminStatus(text) {
@@ -91,17 +136,17 @@ function renderProducts() {
     <div class="table-row">
       <div class="row-top">
         <div class="thumb-row">
-          <img src="${product.imageUrl}" alt="${product.name}">
+          <img src="${product.imageUrl}" alt="${escapeHtml(product.name)}">
           <div>
-            <strong>${product.name}</strong>
-            <div class="inline-meta">${product.sku} · ${product.category || "未分类"}</div>
+            <strong>${escapeHtml(product.name)}</strong>
+            <div class="inline-meta">${escapeHtml(product.sku)} · ${escapeHtml(product.category || "未分类")}</div>
           </div>
         </div>
         <button type="button" class="ghost edit-product-btn" data-product-id="${product.id}">编辑</button>
       </div>
       <div class="row-bottom">
-        <div class="inline-meta">${product.description || "暂无描述"}</div>
-        <div class="tag">${money(product.price)} · 库存 ${product.stock}</div>
+        <div class="inline-meta">${escapeHtml(product.description || "暂无描述")}</div>
+        <div class="tag ${product.stock <= 5 ? "warning" : ""}">${money(product.price)} · 库存 ${product.stock}</div>
       </div>
     </div>
   `).join("");
@@ -123,33 +168,85 @@ function renderOrders() {
     host.innerHTML = `<div class="empty-state">暂时没有订单数据。</div>`;
     return;
   }
-  const statusOptions = ["DRAFT", "PENDING_CONFIRMATION", "CONFIRMED", "PROCESSING", "SHIPPED", "COMPLETED", "REFUND_REQUESTED", "CANCELLED"];
   host.innerHTML = adminState.orders.map((order) => `
     <div class="table-row">
       <div class="row-top">
         <div>
-          <strong>${order.orderNo}</strong>
-          <div class="inline-meta">${order.displayName} / ${order.username}</div>
+          <strong>${escapeHtml(order.orderNo)}</strong>
+          <div class="inline-meta">${escapeHtml(order.displayName)} / ${escapeHtml(order.username)}</div>
         </div>
-        <div class="auth-actions">
-          <select class="order-status-select" data-order-id="${order.id}">
-            ${statusOptions.map((status) => `<option value="${status}" ${status === order.status ? "selected" : ""}>${status}</option>`).join("")}
-          </select>
-          <button type="button" class="primary save-order-status-btn" data-order-id="${order.id}">更新状态</button>
+        <div class="tag ${order.status === "REFUND_REQUESTED" ? "danger" : order.status === "REFUNDED" ? "success" : ""}">
+          ${escapeHtml(statusLabel(order.status))}
         </div>
       </div>
       <div class="row-bottom">
-        <div class="inline-meta">金额 ${money(order.totalAmount)} · 地址 ${order.shippingAddress}</div>
-        <div class="tag">${order.status}</div>
+        <div class="inline-meta">创建时间 ${formatDateTime(order.createdAt)}</div>
+        <div class="inline-meta">金额 ${money(order.totalAmount)} · 地址 ${escapeHtml(order.shippingAddress)}</div>
       </div>
+      ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
       <div class="order-items">
-        ${(order.items || []).map((item) => `<div>${item.productName} x ${item.quantity} · ${money(item.lineTotal)}</div>`).join("")}
+        ${(order.items || []).map((item) => `<div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity} · ${money(item.lineTotal)}</div>`).join("")}
       </div>
+      ${renderAdminOrderControls(order)}
     </div>
   `).join("");
   host.querySelectorAll(".save-order-status-btn").forEach((button) => {
     button.addEventListener("click", () => updateOrderStatus(Number(button.dataset.orderId)));
   });
+  host.querySelectorAll(".refund-review-btn").forEach((button) => {
+    button.addEventListener("click", () => reviewRefund(Number(button.dataset.orderId), button.dataset.approved === "true"));
+  });
+}
+
+function renderAdminOrderControls(order) {
+  const nextStatuses = availableNextStatuses(order.status);
+  const notePlaceholder = order.status === "REFUND_REQUESTED"
+    ? "审核意见，例如同意退款或驳回原因"
+    : "运营备注，例如催发货、用户沟通结果";
+  if (order.status === "REFUND_REQUESTED") {
+    return `
+      <div class="order-action-block">
+        <textarea class="admin-order-note-input" data-order-id="${order.id}" placeholder="${escapeHtml(notePlaceholder)}"></textarea>
+        <div class="order-actions">
+          <button type="button" class="primary refund-review-btn" data-order-id="${order.id}" data-approved="true">同意退款</button>
+          <button type="button" class="ghost refund-review-btn" data-order-id="${order.id}" data-approved="false">驳回退款</button>
+        </div>
+        <div class="panel-hint">同意退款后订单会进入“已退款”，库存会自动回补；驳回后订单回到“已完成”。</div>
+      </div>
+    `;
+  }
+  if (!nextStatuses.length) {
+    return `<div class="panel-hint">当前订单已到最终态，暂无进一步履约动作。</div>`;
+  }
+  return `
+    <div class="order-action-block">
+      <textarea class="admin-order-note-input" data-order-id="${order.id}" placeholder="${escapeHtml(notePlaceholder)}"></textarea>
+      <div class="order-actions">
+        <select class="order-status-select" data-order-id="${order.id}">
+          ${nextStatuses.map((status) => `<option value="${status}">${escapeHtml(statusLabel(status))}</option>`).join("")}
+        </select>
+        <button type="button" class="primary save-order-status-btn" data-order-id="${order.id}">推进订单</button>
+      </div>
+      <div class="panel-hint">这里只展示符合当前状态的下一步动作，避免误操作破坏订单流转。</div>
+    </div>
+  `;
+}
+
+function availableNextStatuses(status) {
+  switch (status) {
+    case "DRAFT":
+      return ["PENDING_CONFIRMATION", "CONFIRMED", "CANCELLED"];
+    case "PENDING_CONFIRMATION":
+      return ["CONFIRMED", "CANCELLED"];
+    case "CONFIRMED":
+      return ["PROCESSING", "SHIPPED", "CANCELLED"];
+    case "PROCESSING":
+      return ["SHIPPED", "CANCELLED"];
+    case "SHIPPED":
+      return ["COMPLETED"];
+    default:
+      return [];
+  }
 }
 
 function renderKnowledgeDocs() {
@@ -168,10 +265,38 @@ function renderKnowledgeDocs() {
   host.innerHTML = adminState.knowledgeDocs.map((doc) => `
     <div class="knowledge-item">
       <div class="row-top">
-        <strong>${doc.title}</strong>
-        <div class="tag">${doc.docType}</div>
+        <strong>${escapeHtml(doc.title)}</strong>
+        <div class="tag">${escapeHtml(doc.docType)}</div>
       </div>
-      <div class="inline-meta">${doc.contentPreview}</div>
+      <div class="inline-meta">${escapeHtml(doc.contentPreview)}</div>
+    </div>
+  `).join("");
+}
+
+function renderKnowledgeSearchResults() {
+  const host = adminById("knowledgeSearchResults");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">管理员登录后可测试知识库的向量检索效果。</div>`;
+    return;
+  }
+  if (!adminState.knowledgeSearchKeyword) {
+    host.innerHTML = `<div class="empty-state">输入关键词，看看 AI 客服能从知识库召回哪些片段。</div>`;
+    return;
+  }
+  if (!adminState.knowledgeMatches.length) {
+    host.innerHTML = `<div class="empty-state">没有命中相关知识片段，换个关键词试试。</div>`;
+    return;
+  }
+  host.innerHTML = adminState.knowledgeMatches.map((match) => `
+    <div class="knowledge-item knowledge-match">
+      <div class="row-top">
+        <strong>${escapeHtml(match.title)}</strong>
+        <div class="tag">命中片段</div>
+      </div>
+      <div class="inline-meta">${escapeHtml(match.chunkText)}</div>
     </div>
   `).join("");
 }
@@ -188,11 +313,11 @@ function renderUsers() {
   host.innerHTML = adminState.users.map((user) => `
     <div class="user-row">
       <div class="row-top">
-        <strong>${user.displayName}</strong>
-        <div class="tag">${user.role}</div>
+        <strong>${escapeHtml(user.displayName)}</strong>
+        <div class="tag">${escapeHtml(user.role)}</div>
       </div>
-      <div class="inline-meta">${user.username}</div>
-      <div class="inline-meta">${user.shippingAddress || "未填写地址"}</div>
+      <div class="inline-meta">${escapeHtml(user.username)}</div>
+      <div class="inline-meta">${escapeHtml(user.shippingAddress || "未填写地址")}</div>
     </div>
   `).join("");
 }
@@ -244,6 +369,7 @@ async function loadAdminData() {
     renderProducts();
     renderOrders();
     renderKnowledgeDocs();
+    renderKnowledgeSearchResults();
     renderUsers();
     return;
   }
@@ -263,6 +389,7 @@ async function loadAdminData() {
   renderProducts();
   renderOrders();
   renderKnowledgeDocs();
+  renderKnowledgeSearchResults();
   renderUsers();
 }
 
@@ -311,11 +438,27 @@ async function saveProduct(event) {
 
 async function updateOrderStatus(orderId) {
   const select = document.querySelector(`.order-status-select[data-order-id="${orderId}"]`);
+  const note = readAdminOrderNote(orderId);
   await adminFetchJson(`/api/admin/orders/${orderId}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status: select.value }),
+    body: JSON.stringify({ status: select.value, note }),
   });
   await loadAdminData();
+  setAdminStatus("订单履约状态已更新");
+}
+
+async function reviewRefund(orderId, approved) {
+  const note = readAdminOrderNote(orderId);
+  await adminFetchJson(`/api/admin/orders/${orderId}/refund-review`, {
+    method: "PATCH",
+    body: JSON.stringify({ approved, note }),
+  });
+  await loadAdminData();
+  setAdminStatus(approved ? "退款申请已通过，库存已回补" : "退款申请已驳回，订单回到已完成");
+}
+
+function readAdminOrderNote(orderId) {
+  return document.querySelector(`.admin-order-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
 async function saveKnowledge(event) {
@@ -332,6 +475,24 @@ async function saveKnowledge(event) {
   adminById("knowledgeType").value = "";
   adminById("knowledgeContent").value = "";
   await loadAdminData();
+  if (adminById("knowledgeSearchInput").value.trim()) {
+    await searchKnowledge();
+  }
+}
+
+async function searchKnowledge() {
+  const keyword = adminById("knowledgeSearchInput").value.trim();
+  adminState.knowledgeSearchKeyword = keyword;
+  if (!keyword) {
+    adminState.knowledgeMatches = [];
+    renderKnowledgeSearchResults();
+    return;
+  }
+  const result = await adminFetchJson(`/api/admin/knowledge/search?keyword=${encodeURIComponent(keyword)}`);
+  adminState.knowledgeSearchKeyword = result.keyword || keyword;
+  adminState.knowledgeMatches = result.matches || [];
+  renderKnowledgeSearchResults();
+  setAdminStatus(`已检索知识库：${adminState.knowledgeSearchKeyword}，命中 ${adminState.knowledgeMatches.length} 条片段`);
 }
 
 async function bootstrapAdmin() {
@@ -343,6 +504,8 @@ async function bootstrapAdmin() {
     adminState.products = [];
     adminState.orders = [];
     adminState.knowledgeDocs = [];
+    adminState.knowledgeMatches = [];
+    adminState.knowledgeSearchKeyword = "";
     adminState.users = [];
   }
   await loadAdminData();
@@ -367,5 +530,12 @@ document.addEventListener("DOMContentLoaded", () => {
   adminById("productForm").addEventListener("submit", (event) => runAdminAction(() => saveProduct(event)));
   adminById("resetProductBtn").addEventListener("click", resetProductForm);
   adminById("knowledgeForm").addEventListener("submit", (event) => runAdminAction(() => saveKnowledge(event)));
+  adminById("knowledgeSearchBtn").addEventListener("click", () => runAdminAction(searchKnowledge));
+  adminById("knowledgeSearchInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      runAdminAction(searchKnowledge);
+    }
+  });
   runAdminAction(bootstrapAdmin);
 });

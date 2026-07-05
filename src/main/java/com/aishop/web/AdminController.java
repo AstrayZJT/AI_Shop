@@ -8,13 +8,16 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.aishop.dto.AdminDtos.AdminOrderResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
 import com.aishop.dto.AdminDtos.DashboardMetricResponse;
 import com.aishop.dto.AdminDtos.KnowledgeDocumentResponse;
+import com.aishop.dto.AdminDtos.KnowledgeSearchResponse;
 import com.aishop.dto.AdminDtos.ProductUpsertRequest;
+import com.aishop.dto.AdminDtos.RefundReviewRequest;
 import com.aishop.dto.AdminDtos.UpdateOrderStatusRequest;
 import com.aishop.dto.KnowledgeDtos.ImportRequest;
 import com.aishop.dto.ProductDtos.ProductResponse;
@@ -76,13 +79,27 @@ public class AdminController {
                                                 @PathVariable Long id,
                                                 @RequestBody UpdateOrderStatusRequest request) {
         authService.requireAdmin(session);
-        return adminService.updateOrderStatus(id, request.status());
+        return adminService.updateOrderStatus(id, request.status(), request.note());
+    }
+
+    @PatchMapping("/api/admin/orders/{id}/refund-review")
+    public AdminOrderResponse reviewRefund(HttpSession session,
+                                           @PathVariable Long id,
+                                           @RequestBody RefundReviewRequest request) {
+        authService.requireAdmin(session);
+        return adminService.reviewRefund(id, request.approved(), request.note());
     }
 
     @GetMapping("/api/admin/knowledge/documents")
     public List<KnowledgeDocumentResponse> knowledgeDocuments(HttpSession session) {
         authService.requireAdmin(session);
         return adminService.listKnowledgeDocuments();
+    }
+
+    @GetMapping("/api/admin/knowledge/search")
+    public KnowledgeSearchResponse searchKnowledge(HttpSession session, @RequestParam String keyword) {
+        authService.requireAdmin(session);
+        return adminService.searchKnowledge(keyword);
     }
 
     @PostMapping("/api/admin/knowledge/import")

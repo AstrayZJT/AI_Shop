@@ -2,13 +2,16 @@ package com.aishop.web;
 
 import java.util.List;
 
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.aishop.dto.OrderDtos.PendingOrderDraftResponse;
 import com.aishop.dto.OrderDtos.OrderActionRequest;
 import com.aishop.dto.OrderDtos.OrderDraftRequest;
 import com.aishop.dto.OrderDtos.OrderDraftResponse;
@@ -44,9 +47,19 @@ public class OrderController {
         return orderService.buildDraft(authService.requireUser(session), request.productId(), request.quantity(), request.threadId());
     }
 
+    @GetMapping("/api/orders/draft/current")
+    public PendingOrderDraftResponse currentDraft(HttpSession session, @RequestParam String threadId) {
+        return orderService.latestDraft(authService.requireUser(session), threadId);
+    }
+
     @PostMapping("/api/orders/confirm")
-    public Object confirm(HttpSession session, @RequestBody OrderDraftRequest request) {
+    public OrderResponse confirm(HttpSession session, @RequestBody OrderDraftRequest request) {
         return orderService.confirmDraft(authService.requireUser(session), request.threadId());
+    }
+
+    @DeleteMapping("/api/orders/draft")
+    public PendingOrderDraftResponse cancelDraft(HttpSession session, @RequestParam String threadId) {
+        return orderService.cancelDraft(authService.requireUser(session), threadId);
     }
 
     @PatchMapping("/api/orders/{id}/cancel")

@@ -20,6 +20,9 @@ public class OrderItem extends BaseEntity {
     @Column(nullable = false, length = 128)
     private String productName;
 
+    @Column(length = 64)
+    private String productSku;
+
     @Column(nullable = false)
     private Integer quantity;
 
@@ -43,6 +46,14 @@ public class OrderItem extends BaseEntity {
 
     public void setProductName(String productName) {
         this.productName = productName;
+    }
+
+    public String getProductSku() {
+        return productSku;
+    }
+
+    public void setProductSku(String productSku) {
+        this.productSku = productSku;
     }
 
     public Integer getQuantity() {

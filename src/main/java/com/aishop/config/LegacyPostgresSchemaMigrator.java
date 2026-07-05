@@ -103,6 +103,7 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
                     'SHIPPED',
                     'COMPLETED',
                     'REFUND_REQUESTED',
+                    'REFUNDED',
                     'CANCELLED'
                 ))
                 """);

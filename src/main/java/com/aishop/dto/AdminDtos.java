@@ -28,6 +28,7 @@ public final class AdminDtos {
                                        String categoryDescription) {}
 
     public record AdminOrderItemResponse(String productName,
+                                         String productSku,
                                          Integer quantity,
                                          BigDecimal unitPrice,
                                          BigDecimal lineTotal) {}
@@ -43,7 +44,9 @@ public final class AdminDtos {
                                      Instant createdAt,
                                      List<AdminOrderItemResponse> items) {}
 
-    public record UpdateOrderStatusRequest(String status) {}
+    public record UpdateOrderStatusRequest(String status, String note) {}
+
+    public record RefundReviewRequest(Boolean approved, String note) {}
 
     public record KnowledgeDocumentResponse(Long id,
                                             String title,

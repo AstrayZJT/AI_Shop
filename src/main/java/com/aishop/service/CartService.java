@@ -147,6 +147,7 @@ public class CartService {
             OrderItem orderItem = new OrderItem();
             orderItem.setOrder(order);
             orderItem.setProductName(product.getName());
+            orderItem.setProductSku(product.getSku());
             orderItem.setQuantity(item.getQuantity());
             orderItem.setUnitPrice(product.getPrice());
             orderItem.setLineTotal(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
