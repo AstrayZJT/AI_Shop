@@ -19,8 +19,10 @@ import com.aishop.domain.OrderStatus;
 import com.aishop.domain.PendingOrderDraft;
 import com.aishop.domain.Product;
 import com.aishop.domain.ProductCategory;
+import com.aishop.domain.ProductFavorite;
 import com.aishop.domain.ProductReview;
 import com.aishop.domain.ShopOrder;
+import com.aishop.domain.ShippingAddress;
 import com.aishop.domain.UserRole;
 import com.aishop.dto.KnowledgeDtos.ImportRequest;
 import com.aishop.repository.AfterSalesCaseRepository;
@@ -31,9 +33,11 @@ import com.aishop.repository.KnowledgeDocumentRepository;
 import com.aishop.repository.OrderItemRepository;
 import com.aishop.repository.PendingOrderDraftRepository;
 import com.aishop.repository.ProductCategoryRepository;
+import com.aishop.repository.ProductFavoriteRepository;
 import com.aishop.repository.ProductRepository;
 import com.aishop.repository.ProductReviewRepository;
 import com.aishop.repository.ShopOrderRepository;
+import com.aishop.repository.ShippingAddressRepository;
 import com.aishop.service.KnowledgeService;
 import com.aishop.service.PromotionService;
 
@@ -53,6 +57,8 @@ public class DataInitializer {
                                AssistantSessionRepository assistantSessionRepository,
                                AssistantMessageRepository assistantMessageRepository,
                                PendingOrderDraftRepository pendingOrderDraftRepository,
+                               ProductFavoriteRepository productFavoriteRepository,
+                               ShippingAddressRepository shippingAddressRepository,
                                PromotionService promotionService) {
         return args -> {
             var encoder = new BCryptPasswordEncoder();
@@ -201,7 +207,9 @@ public class DataInitializer {
                     afterSalesCaseRepository,
                     assistantSessionRepository,
                     assistantMessageRepository,
-                    pendingOrderDraftRepository);
+                    pendingOrderDraftRepository,
+                    productFavoriteRepository,
+                    shippingAddressRepository);
         };
     }
 
@@ -244,13 +252,20 @@ public class DataInitializer {
                                       AfterSalesCaseRepository afterSalesCaseRepository,
                                       AssistantSessionRepository assistantSessionRepository,
                                       AssistantMessageRepository assistantMessageRepository,
-                                      PendingOrderDraftRepository pendingOrderDraftRepository) {
+                                      PendingOrderDraftRepository pendingOrderDraftRepository,
+                                      ProductFavoriteRepository productFavoriteRepository,
+                                      ShippingAddressRepository shippingAddressRepository) {
         Product audio = requireProduct(productRepository, "AUDIO-002");
         Product phone = requireProduct(productRepository, "PHONE-001");
         Product tablet = requireProduct(productRepository, "PAD-003");
         Product purifier = requireProduct(productRepository, "HOME-004");
         Product runningShoes = requireProduct(productRepository, "SPORT-006");
         Instant now = Instant.now();
+
+        seedFavorite(productFavoriteRepository, demoUser, audio);
+        seedFavorite(productFavoriteRepository, demoUser, tablet);
+        seedAddress(shippingAddressRepository, demoUser, "家", "演示用户", "13800000001", "上海市浦东新区演示路 88 号", true);
+        seedAddress(shippingAddressRepository, demoUser, "公司", "演示用户", "13800000001", "上海市徐汇区漕溪北路 399 号 12 层", false);
 
         SeededOrder completedAudioOrder = seedOrder(
                 orderRepository,
@@ -426,6 +441,38 @@ public class DataInitializer {
     private Product requireProduct(ProductRepository productRepository, String sku) {
         return productRepository.findBySku(sku)
                 .orElseThrow(() -> new IllegalStateException("Missing seeded product: " + sku));
+    }
+
+    private void seedFavorite(ProductFavoriteRepository productFavoriteRepository, AppUser user, Product product) {
+        if (productFavoriteRepository.existsByUserAndProduct(user, product)) {
+            return;
+        }
+        ProductFavorite favorite = new ProductFavorite();
+        favorite.setUser(user);
+        favorite.setProduct(product);
+        productFavoriteRepository.save(favorite);
+    }
+
+    private void seedAddress(ShippingAddressRepository shippingAddressRepository,
+                             AppUser user,
+                             String label,
+                             String recipientName,
+                             String phone,
+                             String addressLine,
+                             boolean defaultAddress) {
+        boolean exists = shippingAddressRepository.findByUserOrderByDefaultAddressDescCreatedAtDesc(user).stream()
+                .anyMatch(address -> addressLine.equals(address.getAddressLine()));
+        if (exists) {
+            return;
+        }
+        ShippingAddress address = new ShippingAddress();
+        address.setUser(user);
+        address.setLabel(label);
+        address.setRecipientName(recipientName);
+        address.setPhone(phone);
+        address.setAddressLine(addressLine);
+        address.setDefaultAddress(defaultAddress);
+        shippingAddressRepository.save(address);
     }
 
     private SeededOrder seedOrder(ShopOrderRepository orderRepository,

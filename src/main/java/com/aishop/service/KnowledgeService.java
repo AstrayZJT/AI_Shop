@@ -2,6 +2,7 @@ package com.aishop.service;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -83,53 +84,48 @@ public class KnowledgeService {
 
     @Transactional(readOnly = true)
     public List<SearchResponse> search(String keyword) {
-        if (keyword == null || keyword.isBlank()) {
+        String query = normalizeSearchKeyword(keyword);
+        if (query == null) {
             return List.of();
         }
 
-        Embedding queryEmbedding = embeddingModel.embed(TextSegment.from(keyword)).content();
-        LinkedHashMap<Long, KnowledgeChunk> orderedChunks = new LinkedHashMap<>();
+        Embedding queryEmbedding = embeddingModel.embed(TextSegment.from(query)).content();
+        LinkedHashMap<Long, SearchCandidate> candidates = new LinkedHashMap<>();
         int targetSize = Math.max(1, properties.rag().topK());
+        int textLimit = Math.max(10, targetSize * 2);
 
-        for (KnowledgeChunk chunk : chunkRepository.findTop10ByChunkTextContainingIgnoreCaseOrderByIdDesc(keyword.trim())) {
-            orderedChunks.putIfAbsent(chunk.getId(), chunk);
-            if (orderedChunks.size() >= targetSize) {
-                break;
-            }
-        }
-
-        if (orderedChunks.size() < targetSize) {
-            for (String token : extractSearchTokens(keyword)) {
-                for (KnowledgeChunk chunk : chunkRepository.findTop10ByChunkTextContainingIgnoreCaseOrderByIdDesc(token)) {
-                    orderedChunks.putIfAbsent(chunk.getId(), chunk);
-                    if (orderedChunks.size() >= targetSize) {
-                        break;
-                    }
-                }
-                if (orderedChunks.size() >= targetSize) {
-                    break;
-                }
-            }
+        registerTextMatches(candidates, query, query, true, textLimit);
+        for (String token : extractSearchTokens(query)) {
+            registerTextMatches(candidates, token, token, false, textLimit);
         }
 
         embeddingStore.search(EmbeddingSearchRequest.builder()
                         .queryEmbedding(queryEmbedding)
-                        .maxResults(targetSize)
+                        .maxResults(textLimit)
                         .minScore(0.15)
                         .build())
                 .matches().stream()
-                .map(match -> match.embedded().metadata().getLong("chunk_id"))
-                .filter(Objects::nonNull)
-                .distinct()
-                .forEach(chunkId -> chunkRepository.findById(chunkId)
-                        .ifPresent(chunk -> orderedChunks.putIfAbsent(chunk.getId(), chunk)));
+                .forEach(match -> {
+                    Long chunkId = match.embedded().metadata().getLong("chunk_id");
+                    if (chunkId == null) {
+                        return;
+                    }
+                    chunkRepository.findById(chunkId).ifPresent(chunk -> candidates
+                            .computeIfAbsent(chunk.getId(), ignored -> new SearchCandidate(chunk))
+                            .registerVectorScore(match.score()));
+                });
 
-        if (orderedChunks.isEmpty()) {
+        if (candidates.isEmpty()) {
             return List.of();
         }
 
-        return orderedChunks.values().stream()
-                .map(chunk -> new SearchResponse(chunk.getId(), chunk.getDocument().getId(), chunk.getDocument().getTitle(), chunk.getChunkText()))
+        return candidates.values().stream()
+                .sorted(Comparator
+                        .comparingInt(SearchCandidate::rankBucket).reversed()
+                        .thenComparing(SearchCandidate::displayScore, Comparator.reverseOrder())
+                        .thenComparing(SearchCandidate::matchedTermCount, Comparator.reverseOrder())
+                        .thenComparing(candidate -> candidate.chunk().getId()))
+                .map(this::toSearchResponse)
                 .limit(targetSize)
                 .toList();
     }
@@ -170,6 +166,36 @@ public class KnowledgeService {
         }
     }
 
+    private void registerTextMatches(LinkedHashMap<Long, SearchCandidate> candidates,
+                                     String lookupTerm,
+                                     String displayTerm,
+                                     boolean exactPhrase,
+                                     int maxResults) {
+        String normalizedLookupTerm = normalizeSearchKeyword(lookupTerm);
+        if (normalizedLookupTerm == null) {
+            return;
+        }
+        chunkRepository.findTop10ByChunkTextContainingIgnoreCaseOrderByIdDesc(normalizedLookupTerm).stream()
+                .limit(maxResults)
+                .forEach(chunk -> candidates
+                        .computeIfAbsent(chunk.getId(), ignored -> new SearchCandidate(chunk))
+                        .registerTextHit(displayTerm, exactPhrase));
+    }
+
+    private SearchResponse toSearchResponse(SearchCandidate candidate) {
+        KnowledgeChunk chunk = candidate.chunk();
+        return new SearchResponse(
+                chunk.getId(),
+                chunk.getDocument().getId(),
+                chunk.getDocument().getTitle(),
+                chunk.getChunkText(),
+                candidate.matchMode(),
+                roundScore(candidate.displayScore()),
+                candidate.matchedTermsText(),
+                chunkIndexed(chunk),
+                estimateEmbeddingDimensions(chunk.getEmbeddingJson()));
+    }
+
     private List<String> extractSearchTokens(String keyword) {
         LinkedHashSet<String> tokens = Arrays.stream(keyword.toLowerCase(Locale.ROOT).split("[^\\p{IsAlphabetic}\\p{IsDigit}\\u4e00-\\u9fa5]+"))
                 .map(String::trim)
@@ -184,5 +210,127 @@ public class KnowledgeService {
             }
         }
         return List.copyOf(tokens);
+    }
+
+    private String normalizeSearchKeyword(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return null;
+        }
+        return keyword.trim();
+    }
+
+    private boolean chunkIndexed(KnowledgeChunk chunk) {
+        String embeddingJson = chunk.getEmbeddingJson();
+        return embeddingJson != null
+                && !embeddingJson.isBlank()
+                && !"[]".equals(embeddingJson.trim());
+    }
+
+    private int estimateEmbeddingDimensions(String embeddingJson) {
+        if (embeddingJson == null) {
+            return 0;
+        }
+        String trimmed = embeddingJson.trim();
+        if (trimmed.isBlank() || "[]".equals(trimmed)) {
+            return 0;
+        }
+        String body = trimmed;
+        if (body.startsWith("[")) {
+            body = body.substring(1);
+        }
+        if (body.endsWith("]")) {
+            body = body.substring(0, body.length() - 1);
+        }
+        if (body.isBlank()) {
+            return 0;
+        }
+        return (int) Arrays.stream(body.split(","))
+                .map(String::trim)
+                .filter(token -> !token.isEmpty())
+                .count();
+    }
+
+    private Double roundScore(double score) {
+        return Math.round(score * 1000.0) / 1000.0;
+    }
+
+    private static final class SearchCandidate {
+        private final KnowledgeChunk chunk;
+        private final LinkedHashSet<String> matchedTerms = new LinkedHashSet<>();
+        private boolean exactPhrase;
+        private Double vectorScore;
+
+        private SearchCandidate(KnowledgeChunk chunk) {
+            this.chunk = chunk;
+        }
+
+        private KnowledgeChunk chunk() {
+            return chunk;
+        }
+
+        private void registerTextHit(String term, boolean exact) {
+            if (term != null && !term.isBlank()) {
+                matchedTerms.add(term.trim());
+            }
+            if (exact) {
+                exactPhrase = true;
+            }
+        }
+
+        private void registerVectorScore(double score) {
+            vectorScore = vectorScore == null ? score : Math.max(vectorScore, score);
+        }
+
+        private boolean hasTextMatch() {
+            return !matchedTerms.isEmpty();
+        }
+
+        private boolean hasVectorMatch() {
+            return vectorScore != null;
+        }
+
+        private int rankBucket() {
+            if (hasTextMatch() && hasVectorMatch()) {
+                return 3;
+            }
+            if (hasTextMatch()) {
+                return 2;
+            }
+            return 1;
+        }
+
+        private Double displayScore() {
+            if (hasTextMatch() && hasVectorMatch()) {
+                return Math.max(vectorScore, textScore());
+            }
+            if (hasVectorMatch()) {
+                return vectorScore;
+            }
+            return textScore();
+        }
+
+        private double textScore() {
+            double baseScore = exactPhrase ? 0.82 : 0.62;
+            double termBonus = Math.min(0.16, matchedTerms.size() * 0.08);
+            return Math.min(0.99, baseScore + termBonus);
+        }
+
+        private String matchMode() {
+            if (hasTextMatch() && hasVectorMatch()) {
+                return "HYBRID";
+            }
+            if (hasTextMatch()) {
+                return "TEXT";
+            }
+            return "VECTOR";
+        }
+
+        private String matchedTermsText() {
+            return String.join(" / ", matchedTerms);
+        }
+
+        private Integer matchedTermCount() {
+            return matchedTerms.size();
+        }
     }
 }

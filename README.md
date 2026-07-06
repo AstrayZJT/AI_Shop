@@ -4,8 +4,8 @@
 
 当前项目已经不是最早的“聊天演示页”了，而是一个继续在同一仓库内扩展出来的完整业务雏形：
 
-- 客户端：注册、登录、商品浏览、场景化选品推荐、购物车、优惠码结算、下单、订单查询、地址维护、AI 客服
-- 管理端：商品管理、营销活动管理、订单履约、售后工作台、退款审核、知识库导入、用户查看、AI 会话接管
+- 客户端：注册、登录、商品浏览、场景化选品推荐、商品收藏、地址簿、购物车、优惠码结算、下单、订单查询、AI 客服
+- 管理端：商品管理、营销活动管理、订单履约、售后工作台、退款审核、知识库导入、客户 360 画像、AI 会话接管
 - AI 客服：商品推荐、订单查询、订单动作代办、优惠活动问答、RAG 检索、人工转接、后台人工回复回流
 
 ## 1. 当前架构
@@ -113,6 +113,13 @@ $env:OPENAI_API_KEY="你的 Key"
 - 向量模型：`text-embedding-v4`
 
 也就是说，代码层面用的是 OpenAI 兼容客户端，但你实际可以接的是 DashScope 的兼容接口。
+
+配置文件里现在有两组和模型相关的配置：
+
+- `langchain4j.open-ai.*`：保留给 LangChain4j OpenAI 兼容配置
+- `shop.ai.*`：项目实际用来装配聊天模型、embedding 模型和运行态面板的业务配置
+
+真正决定当前进程是否启用远程模型 Bean 的，是 `shop.ai.enabled`，也就是环境变量 `SHOP_AI_ENABLED`。如果这里是 `false`，即使 `application.yml` 里写着 `qwen-plus`，项目也会走本地兜底模型。
 
 这里要特别注意一件事：
 
@@ -463,10 +470,13 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - 用户注册、登录、退出
 - 个人资料维护
+- 地址簿维护，支持新增、编辑、删除、设为默认地址
 - 商品列表、分类、搜索、详情浏览、排序
 - 商品场景化推荐、推荐理由、选品决策区
+- 商品收藏 / 取消收藏，收藏会影响“为你推荐”和 AI 导购上下文
 - 从商品卡片快速发起 AI 咨询、同类对比、下单草稿
 - 购物车增删改
+- 购物车结算时可从地址簿选择地址，也可以手动填写本次地址
 - 购物车优惠码输入、活动推荐、满减 / 折扣估算
 - 结算下单并生成待支付订单
 - 模拟支付，支持模拟支付、支付宝、微信支付、银行卡等支付方式标签
@@ -501,7 +511,8 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 确认收到退货并退款
 - 售后工作台（待审核、待回寄、待验收、已完成、已驳回）
 - 售后工单按阶段统计、筛选、查看逆向物流和订单时间线
-- 用户列表
+- 用户列表与客户 360 画像
+- 客户画像聚合累计消费、客单价、地址数量、收藏意向、售后风险、最近订单、AI 会话和下单草稿
 - 知识库文档导入与检索
 - 知识库原文查看、分块明细查看、索引状态查看
 - 全量知识索引重建
@@ -521,6 +532,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 当前 AI 客服已经能处理这些常见场景：
 
 - 商品推荐
+- 结合用户最近收藏的商品做个性化导购
 - 商品详情咨询、同类对比、评价口碑参考和下单草稿快捷引导
 - 查询最近订单
 - 查询具体订单状态、物流、地址、最新履约进度
@@ -592,7 +604,24 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - `src/main/java/com/aishop/service/InMemoryEmbeddingStoreFacade.java`
 - `src/main/java/com/aishop/config/EmbeddingStoreConfig.java`
 
-### 9.4 启动时会发生什么
+### 9.4 管理端怎么验证 RAG 是否真的工作
+
+管理端的“知识文档”区域现在不仅能搜到片段，还能直接看检索链路：
+
+- 命中模式：`混合命中` / `向量召回` / `关键词命中`
+- 命中分数：用于判断召回相关性
+- 命中词：用于判断是否只是关键词匹配
+- 索引状态：显示该 chunk 是否已经生成 embedding 并进入当前检索索引
+- 原文定位：点击“定位原文片段”可以跳到对应知识文档和具体 chunk
+- 向量缓存：文档详情里可以看到 chunk 的 embedding 维度和缓存预览
+
+这块对应的 API 是：
+
+- `GET /api/admin/knowledge/search?keyword=...`
+- `GET /api/admin/knowledge/documents/{id}`
+- `POST /api/admin/knowledge/reindex`
+
+### 9.5 启动时会发生什么
 
 应用启动后会执行知识索引同步：
 
@@ -605,7 +634,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - `src/main/java/com/aishop/service/KnowledgeIndexSynchronizer.java`
 
-### 9.5 当前 RAG 的真实结论
+### 9.6 当前 RAG 的真实结论
 
 请直接按下面这条理解：
 
@@ -617,8 +646,10 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 常用表如下：
 
 - 用户：`app_users`
+- 用户地址簿：`shipping_addresses`
 - 购物车：`carts`
 - 购物车项：`cart_items`
+- 商品收藏：`product_favorites`
 - 订单：`orders`
 - 订单项：`order_items`
 - 营销活动：`promotion_campaigns`

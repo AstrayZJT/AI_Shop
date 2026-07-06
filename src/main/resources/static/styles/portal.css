@@ -510,6 +510,67 @@ textarea {
   flex: 1 1 120px;
 }
 
+.address-select-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed rgba(15, 23, 42, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.address-select {
+  min-height: 44px;
+}
+
+.address-book-box {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.address-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.address-card.active {
+  border-color: rgba(15, 118, 110, 0.28);
+  box-shadow: 0 14px 30px rgba(15, 118, 110, 0.12);
+}
+
+.checkbox-line {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.checkbox-line input {
+  width: auto;
+  margin: 0;
+}
+
+.product-favorite-btn.active {
+  border-color: rgba(194, 65, 12, 0.24);
+  background: rgba(194, 65, 12, 0.1);
+  color: var(--accent);
+}
+
+.favorite-mini-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
 .tag {
   display: inline-flex;
   align-items: center;
@@ -588,6 +649,11 @@ textarea {
 .user-row {
   display: grid;
   gap: 10px;
+}
+
+.user-row.active {
+  border-color: rgba(15, 118, 110, 0.28);
+  background: rgba(15, 118, 110, 0.06);
 }
 
 .row-top,
@@ -954,6 +1020,14 @@ textarea {
   font-size: 14px;
 }
 
+.assistant-source-tags,
+.knowledge-match-tags,
+.knowledge-chunk-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .assistant-empty {
   padding: 12px;
   border: 1px dashed var(--line);
@@ -1177,6 +1251,42 @@ textarea {
   gap: 8px;
 }
 
+.knowledge-chunk-card.active {
+  border-color: rgba(15, 118, 110, 0.3);
+  background: rgba(15, 118, 110, 0.08);
+  box-shadow: 0 14px 28px rgba(15, 118, 110, 0.1);
+}
+
+.knowledge-chunk-text {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.knowledge-vector-preview {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.knowledge-vector-preview summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.knowledge-vector-preview code {
+  display: block;
+  max-height: 84px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.06);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .metric-grid {
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
 }
@@ -1363,6 +1473,36 @@ textarea {
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 8px;
   background: rgba(248, 250, 252, 0.9);
+}
+
+.customer-insight-panel {
+  margin-top: 16px;
+}
+
+.customer-insight-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.customer-insight-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.customer-risk-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.customer-context-grid {
+  margin-top: 0;
 }
 
 .nested-head {

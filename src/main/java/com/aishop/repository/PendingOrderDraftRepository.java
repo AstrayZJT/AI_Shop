@@ -5,11 +5,13 @@ import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import com.aishop.domain.AppUser;
 import com.aishop.domain.PendingOrderDraft;
 
 public interface PendingOrderDraftRepository extends JpaRepository<PendingOrderDraft, Long> {
     Optional<PendingOrderDraft> findTop1ByThreadIdOrderByCreatedAtDesc(String threadId);
     Optional<PendingOrderDraft> findTop1ByThreadIdAndUserIdOrderByCreatedAtDesc(String threadId, Long userId);
     Optional<PendingOrderDraft> findTop1ByThreadIdAndStatusOrderByCreatedAtDesc(String threadId, String status);
+    List<PendingOrderDraft> findTop10ByUserOrderByCreatedAtDesc(AppUser user);
     List<PendingOrderDraft> findTop20ByStatusOrderByCreatedAtDesc(String status);
 }

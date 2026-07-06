@@ -77,6 +77,7 @@
             </div>
             <div id="cartItems" class="stack-list"></div>
             <div class="checkout-box">
+              <div id="checkoutAddressSelector" class="address-select-panel"></div>
               <input id="shippingAddress" type="text" placeholder="本次结算地址，可留空">
               <div class="promotion-input-row">
                 <input id="promotionCodeInput" type="text" placeholder="输入优惠码，或从下方活动中选择">
@@ -106,6 +107,40 @@
                 <button id="syncAddressBtn" type="button" class="ghost">同步到结算地址</button>
               </div>
             </form>
+            <div class="address-book-box">
+              <div class="section-head compact nested-head">
+                <div>
+                  <h3>地址簿</h3>
+                  <p>保存多个常用地址，结算时可以直接选择。</p>
+                </div>
+              </div>
+              <form id="addressForm" class="form-grid">
+                <input id="addressLabel" type="text" placeholder="标签，例如 家 / 公司">
+                <input id="addressRecipient" type="text" placeholder="收货人">
+                <input id="addressPhone" type="text" placeholder="联系电话">
+                <textarea id="addressLine" placeholder="详细收货地址"></textarea>
+                <label class="checkbox-line">
+                  <input id="addressDefault" type="checkbox">
+                  <span>设为默认地址</span>
+                </label>
+                <div class="form-actions">
+                  <button id="saveAddressBtn" type="submit" class="primary">保存地址</button>
+                  <button id="resetAddressBtn" type="button" class="ghost">清空地址表单</button>
+                </div>
+              </form>
+              <div id="addressList" class="stack-list"></div>
+            </div>
+          </section>
+
+          <section class="panel rail-panel">
+            <div class="section-head compact">
+              <div>
+                <h2>我的收藏</h2>
+                <p>先收藏感兴趣的商品，后续可以继续比较，也会影响 AI 推荐和管理端客户画像。</p>
+              </div>
+            </div>
+            <div id="favoritesSummary" class="panel-hint">登录后可维护收藏商品。</div>
+            <div id="favoritesList" class="stack-list"></div>
           </section>
 
           <section class="panel rail-panel" id="assistant">

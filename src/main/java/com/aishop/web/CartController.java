@@ -53,6 +53,6 @@ public class CartController {
 
     @PostMapping("/api/cart/checkout")
     public OrderResponse checkout(HttpSession session, @RequestBody CheckoutRequest request) {
-        return cartService.checkout(authService.requireUser(session), request.shippingAddress(), request.promotionCode());
+        return cartService.checkout(authService.requireUser(session), request.shippingAddress(), request.promotionCode(), request.addressId());
     }
 }

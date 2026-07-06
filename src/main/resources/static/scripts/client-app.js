@@ -5,6 +5,11 @@ const clientState = {
   category: "全部",
   orders: [],
   cart: { items: [], totalAmount: 0, totalItems: 0 },
+  favorites: [],
+  favoriteProductIds: [],
+  addresses: [],
+  selectedAddressId: null,
+  editingAddressId: null,
   promotions: [],
   promotionLoadError: "",
   selectedPromotionCode: "",
@@ -209,6 +214,30 @@ function assistantRoleLabel(role) {
   return "AI 客服";
 }
 
+function isFavoriteProduct(productId) {
+  return clientState.favoriteProductIds.includes(Number(productId));
+}
+
+function favoriteProducts() {
+  return clientState.favorites
+    .map((favorite) => favorite.product)
+    .filter(Boolean);
+}
+
+function favoriteButtonMarkup(productId, compact = false) {
+  const favored = isFavoriteProduct(productId);
+  return `
+    <button
+      type="button"
+      class="ghost product-favorite-btn ${favored ? "active" : ""}"
+      data-product-id="${productId}"
+      title="${favored ? "取消收藏" : "收藏商品"}"
+    >
+      ${compact ? (favored ? "已收藏" : "收藏") : (favored ? "已收藏" : "收藏商品")}
+    </button>
+  `;
+}
+
 function formatMessageTime(value) {
   if (!value) {
     return "";
@@ -228,11 +257,50 @@ function normalizeAssistantSources(sources) {
           chunkText: source,
           documentId: null,
           chunkId: null,
+          matchMode: "TEXT",
+          score: null,
+          matchedTerms: "",
+          indexed: false,
         };
       }
-      return source;
+      return {
+        ...source,
+        matchMode: source.matchMode || "TEXT",
+        score: typeof source.score === "number" ? source.score : null,
+        matchedTerms: source.matchedTerms || "",
+        indexed: source.indexed !== false,
+      };
     })
     .filter((source) => source && (source.title || source.chunkText));
+}
+
+function knowledgeMatchModeLabel(mode) {
+  switch ((mode || "").toUpperCase()) {
+    case "HYBRID":
+      return "混合命中";
+    case "VECTOR":
+      return "向量召回";
+    default:
+      return "关键词命中";
+  }
+}
+
+function knowledgeMatchModeTone(mode) {
+  switch ((mode || "").toUpperCase()) {
+    case "HYBRID":
+      return "success";
+    case "VECTOR":
+      return "info";
+    default:
+      return "";
+  }
+}
+
+function formatKnowledgeScore(score) {
+  if (typeof score !== "number" || Number.isNaN(score)) {
+    return "";
+  }
+  return score.toFixed(3);
 }
 
 function fallbackAssistantActions(intent, session) {
@@ -309,6 +377,12 @@ function renderAssistantSources(sources) {
             <strong>${escapeHtml(source.title || "知识库片段")}</strong>
             <span class="inline-meta">${source.documentId ? `文档 #${escapeHtml(source.documentId)}` : "知识命中"}</span>
           </div>
+          <div class="assistant-source-tags">
+            <span class="tag ${knowledgeMatchModeTone(source.matchMode)}">${escapeHtml(knowledgeMatchModeLabel(source.matchMode))}</span>
+            ${formatKnowledgeScore(source.score) ? `<span class="tag">分数 ${escapeHtml(formatKnowledgeScore(source.score))}</span>` : ""}
+            <span class="tag ${source.indexed === false ? "warning" : "success"}">${source.indexed === false ? "未入索引" : "已索引"}</span>
+          </div>
+          ${source.matchedTerms ? `<div class="inline-meta">命中词 ${escapeHtml(source.matchedTerms)}</div>` : ""}
           <div class="panel-hint">${escapeHtml(source.chunkText || "").replaceAll("\n", "<br>")}</div>
         </article>
       `).join("")}
@@ -498,6 +572,9 @@ function productRecommendationScore(product) {
   if (clientState.selectedProductId === product.id) {
     score += 18;
   }
+  if (isFavoriteProduct(product.id)) {
+    score += 36;
+  }
   if (scene.keywords.length && scene.keywords.some((keyword) => pool.includes(normalizeText(keyword)))) {
     score += 55;
   }
@@ -564,6 +641,9 @@ function recommendationReasonTags(product) {
   }
   if (Number(product.averageRating || 0) >= 4.6 && Number(product.reviewCount || 0) > 0) {
     tags.push("口碑较好");
+  }
+  if (isFavoriteProduct(product.id)) {
+    tags.push("已收藏");
   }
   return Array.from(new Set(tags)).slice(0, 3);
 }
@@ -675,6 +755,7 @@ function renderRecommendationPanel() {
         </div>
         <div class="order-actions">
           <button type="button" class="primary product-add-cart-btn" data-product-id="${selected.id}">加入购物车</button>
+          ${favoriteButtonMarkup(selected.id, true)}
           <button type="button" class="ghost product-detail-btn" data-product-id="${selected.id}">查看详情</button>
           <button type="button" class="ghost product-ai-btn" data-product-id="${selected.id}" data-mode="guide">问 AI 适不适合我</button>
         </div>
@@ -716,6 +797,7 @@ function renderRecommendationPanel() {
             <div class="panel-hint">${escapeHtml(recommendationNarrative(product))}</div>
             <div class="product-actions-compact">
               <button type="button" class="ghost product-select-btn" data-product-id="${product.id}">查看</button>
+              ${favoriteButtonMarkup(product.id, true)}
               <button type="button" class="primary product-add-cart-btn" data-product-id="${product.id}">加入购物车</button>
             </div>
           </article>
@@ -837,6 +919,7 @@ function renderProductDetailPanel() {
           </div>
           <div class="order-actions">
             <button type="button" class="primary product-add-cart-btn" data-product-id="${product.id}">加入购物车</button>
+            ${favoriteButtonMarkup(product.id)}
             <button type="button" class="ghost product-ai-btn" data-product-id="${product.id}" data-mode="guide">问 AI 适不适合我</button>
             <button type="button" class="ghost product-ai-btn" data-product-id="${product.id}" data-mode="draft">生成下单草稿</button>
           </div>
@@ -893,10 +976,48 @@ function renderProducts() {
           <button type="button" class="primary product-add-cart-btn" data-product-id="${product.id}">
             加入购物车
           </button>
+          ${favoriteButtonMarkup(product.id, true)}
           <button type="button" class="ghost product-detail-btn" data-product-id="${product.id}">
             查看详情
           </button>
         </div>
+      </div>
+    </article>
+  `).join("");
+  bindCatalogActionButtons(host);
+}
+
+function renderFavorites() {
+  const host = clientById("favoritesList");
+  const summary = clientById("favoritesSummary");
+  if (!host || !summary) {
+    return;
+  }
+  if (!clientState.user) {
+    summary.textContent = "登录后可收藏商品，AI 客服会参考你的收藏偏好。";
+    host.innerHTML = `<div class="empty-state">还没有登录，收藏列表暂不可用。</div>`;
+    return;
+  }
+  const products = favoriteProducts();
+  summary.textContent = products.length
+    ? `已收藏 ${products.length} 件商品，适合继续比较、加入购物车或让 AI 生成草稿。`
+    : "还没有收藏商品，点商品卡里的“收藏”后会出现在这里。";
+  if (!products.length) {
+    host.innerHTML = `<div class="empty-state">你还没有收藏商品。</div>`;
+    return;
+  }
+  host.innerHTML = products.map((product) => `
+    <article class="favorite-mini-card">
+      <div class="row-top">
+        <strong>${escapeHtml(product.name)}</strong>
+        <span class="tag">${currency(product.price)}</span>
+      </div>
+      <div class="inline-meta">${escapeHtml(product.category || "未分类")} · 库存 ${escapeHtml(product.stock || 0)}</div>
+      <div class="panel-hint">${escapeHtml(product.reviewSummary || recommendationNarrative(product))}</div>
+      <div class="product-actions-compact">
+        <button type="button" class="ghost product-detail-btn" data-product-id="${product.id}">查看</button>
+        <button type="button" class="ghost product-ai-btn" data-product-id="${product.id}" data-mode="draft">生成草稿</button>
+        <button type="button" class="ghost product-favorite-btn active" data-product-id="${product.id}">取消收藏</button>
       </div>
     </article>
   `).join("");
@@ -984,6 +1105,39 @@ function bindCatalogActionButtons(host) {
   host.querySelectorAll(".product-ai-btn").forEach((button) => {
     button.addEventListener("click", () => runClientAction(() => askAiAboutProduct(Number(button.dataset.productId), button.dataset.mode)));
   });
+  host.querySelectorAll(".product-favorite-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => toggleFavoriteProduct(Number(button.dataset.productId))));
+  });
+}
+
+async function loadFavorites() {
+  if (!clientState.user) {
+    clientState.favorites = [];
+    clientState.favoriteProductIds = [];
+    renderFavorites();
+    renderCatalogExperience();
+    return;
+  }
+  clientState.favorites = await clientFetchJson("/api/favorites");
+  clientState.favoriteProductIds = clientState.favorites
+    .map((favorite) => favorite.product?.id)
+    .filter((id) => typeof id === "number");
+  renderFavorites();
+  renderCatalogExperience();
+}
+
+async function toggleFavoriteProduct(productId) {
+  if (!clientState.user) {
+    throw new Error("请先登录后再收藏商品");
+  }
+  if (isFavoriteProduct(productId)) {
+    await clientFetchJson(`/api/favorites/products/${productId}`, { method: "DELETE" });
+    setStoreStatus("已取消收藏");
+  } else {
+    const favorite = await clientFetchJson(`/api/favorites/products/${productId}`, { method: "POST" });
+    setStoreStatus(`已收藏 ${favorite.product?.name || "商品"}，AI 推荐会参考你的收藏偏好`);
+  }
+  await loadFavorites();
 }
 
 async function loadProductReviews(productId, options = {}) {
@@ -1255,6 +1409,13 @@ function renderProfile() {
     clientById("profilePreferences"),
     clientById("saveProfileBtn"),
     clientById("syncAddressBtn"),
+    clientById("addressLabel"),
+    clientById("addressRecipient"),
+    clientById("addressPhone"),
+    clientById("addressLine"),
+    clientById("addressDefault"),
+    clientById("saveAddressBtn"),
+    clientById("resetAddressBtn"),
   ];
   if (!clientState.user) {
     if (hint) {
@@ -1269,6 +1430,8 @@ function renderProfile() {
     setInputValue("profilePhone", "");
     setInputValue("profileShippingAddress", "");
     setInputValue("profilePreferences", "");
+    resetAddressForm({ silentStatus: true });
+    renderAddressBook();
     return;
   }
   if (hint) {
@@ -1283,6 +1446,297 @@ function renderProfile() {
   setInputValue("profilePhone", clientState.user.phone || "");
   setInputValue("profileShippingAddress", clientState.user.shippingAddress || "");
   setInputValue("profilePreferences", clientState.user.preferencesSummary || "");
+  renderAddressBook();
+}
+
+function formatAddressLine(address) {
+  if (!address) {
+    return "";
+  }
+  return `${address.recipientName}，${address.phone}，${address.addressLine}`;
+}
+
+function selectedAddress() {
+  return clientState.addresses.find((address) => address.id === clientState.selectedAddressId) || null;
+}
+
+function defaultAddress() {
+  return clientState.addresses.find((address) => address.defaultAddress) || clientState.addresses[0] || null;
+}
+
+function updateAddressFormButtons() {
+  const saveButton = clientById("saveAddressBtn");
+  const resetButton = clientById("resetAddressBtn");
+  if (saveButton) {
+    saveButton.textContent = clientState.editingAddressId ? "更新地址" : "保存地址";
+  }
+  if (resetButton) {
+    resetButton.textContent = clientState.editingAddressId ? "取消编辑" : "清空地址表单";
+  }
+}
+
+function readAddressForm() {
+  return {
+    label: clientById("addressLabel")?.value?.trim() || "",
+    recipientName: clientById("addressRecipient")?.value?.trim() || "",
+    phone: clientById("addressPhone")?.value?.trim() || "",
+    addressLine: clientById("addressLine")?.value?.trim() || "",
+    defaultAddress: Boolean(clientById("addressDefault")?.checked),
+  };
+}
+
+function resetAddressForm(options = {}) {
+  clientState.editingAddressId = null;
+  setInputValue("addressLabel", "");
+  setInputValue("addressRecipient", "");
+  setInputValue("addressPhone", "");
+  setInputValue("addressLine", "");
+  if (clientById("addressDefault")) {
+    clientById("addressDefault").checked = false;
+  }
+  updateAddressFormButtons();
+  if (!options.silentStatus) {
+    setStoreStatus("地址表单已清空");
+  }
+}
+
+function fillAddressForm(addressId) {
+  const address = clientState.addresses.find((item) => item.id === addressId);
+  if (!address) {
+    throw new Error("地址不存在");
+  }
+  clientState.editingAddressId = addressId;
+  setInputValue("addressLabel", address.label || "");
+  setInputValue("addressRecipient", address.recipientName || "");
+  setInputValue("addressPhone", address.phone || "");
+  setInputValue("addressLine", address.addressLine || "");
+  if (clientById("addressDefault")) {
+    clientById("addressDefault").checked = Boolean(address.defaultAddress);
+  }
+  updateAddressFormButtons();
+  clientById("addressForm")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  setStoreStatus(`正在编辑地址：${address.label || address.recipientName}`);
+}
+
+async function refreshCurrentUserProfile() {
+  clientState.user = await clientFetchJson(clientAuthUrl("/api/auth/me"));
+}
+
+async function loadAddresses(options = {}) {
+  const { preferAddressId = null, forceShippingAddress = false } = options;
+  const previousSelectedValue = formatAddressLine(selectedAddress());
+  const previousDefaultValue = formatAddressLine(defaultAddress());
+  const previousProfileAddress = clientState.user?.shippingAddress?.trim() || "";
+  const shippingAddressInput = clientById("shippingAddress");
+  const currentShippingAddress = shippingAddressInput?.value?.trim() || "";
+
+  if (!clientState.user) {
+    clientState.addresses = [];
+    clientState.selectedAddressId = null;
+    clientState.editingAddressId = null;
+    resetAddressForm({ silentStatus: true });
+    renderAddressBook();
+    return;
+  }
+
+  clientState.addresses = await clientFetchJson("/api/addresses");
+  const preferredAddress = preferAddressId == null
+    ? null
+    : clientState.addresses.find((address) => address.id === preferAddressId) || null;
+  const selectedStillExists = clientState.selectedAddressId == null
+    ? null
+    : clientState.addresses.find((address) => address.id === clientState.selectedAddressId) || null;
+  const defaultCandidate = clientState.addresses.find((address) => address.defaultAddress) || clientState.addresses[0] || null;
+  const manualCheckoutAddress = Boolean(currentShippingAddress)
+    && !forceShippingAddress
+    && currentShippingAddress !== previousSelectedValue
+    && currentShippingAddress !== previousDefaultValue
+    && currentShippingAddress !== previousProfileAddress;
+  const nextSelected = preferredAddress || selectedStillExists || (manualCheckoutAddress ? null : defaultCandidate);
+
+  clientState.selectedAddressId = nextSelected?.id || null;
+  if (clientState.editingAddressId && !clientState.addresses.some((address) => address.id === clientState.editingAddressId)) {
+    resetAddressForm({ silentStatus: true });
+  } else {
+    updateAddressFormButtons();
+  }
+
+  const nextDefaultAddress = defaultAddress();
+  clientState.user.shippingAddress = nextDefaultAddress
+    ? formatAddressLine(nextDefaultAddress)
+    : (clientState.user.shippingAddress || "");
+  if (!clientState.user.phone && nextDefaultAddress?.phone) {
+    clientState.user.phone = nextDefaultAddress.phone;
+  }
+  setInputValue("profileShippingAddress", clientState.user.shippingAddress || "");
+  setInputValue("profilePhone", clientState.user.phone || "");
+
+  const shouldSyncShippingInput = forceShippingAddress
+    || !currentShippingAddress
+    || currentShippingAddress === previousSelectedValue
+    || currentShippingAddress === previousDefaultValue
+    || currentShippingAddress === previousProfileAddress;
+  const nextSelectedAddress = selectedAddress();
+  if (shippingAddressInput && shouldSyncShippingInput) {
+    shippingAddressInput.value = nextSelectedAddress
+      ? formatAddressLine(nextSelectedAddress)
+      : (clientState.user.shippingAddress || "");
+  }
+
+  renderAddressBook();
+}
+
+function renderCheckoutAddressSelector() {
+  const host = clientById("checkoutAddressSelector");
+  if (!host) {
+    return;
+  }
+  if (!clientState.user) {
+    host.innerHTML = `<div class="panel-hint">登录后可从地址簿选择收货地址。</div>`;
+    return;
+  }
+  if (!clientState.addresses.length) {
+    host.innerHTML = `<div class="panel-hint">还没有保存地址，可直接在下方手填本次结算地址。</div>`;
+    return;
+  }
+  host.innerHTML = `
+    <label class="inline-meta" for="checkoutAddressSelect">地址簿</label>
+    <select id="checkoutAddressSelect" class="address-select">
+      <option value="" ${clientState.selectedAddressId == null ? "selected" : ""}>手动填写本次地址</option>
+      ${clientState.addresses.map((address) => `
+        <option value="${address.id}" ${clientState.selectedAddressId === address.id ? "selected" : ""}>
+          ${escapeHtml(address.defaultAddress ? "默认 · " : "")}${escapeHtml(address.label || "收货地址")} · ${escapeHtml(address.recipientName)} · ${escapeHtml(address.addressLine)}
+        </option>
+      `).join("")}
+    </select>
+  `;
+  clientById("checkoutAddressSelect")?.addEventListener("change", (event) => {
+    const rawValue = event.target.value?.trim();
+    if (!rawValue) {
+      clientState.selectedAddressId = null;
+      return;
+    }
+    const addressId = Number(rawValue);
+    clientState.selectedAddressId = Number.isNaN(addressId) ? null : addressId;
+    const address = selectedAddress();
+    if (address && clientById("shippingAddress")) {
+      clientById("shippingAddress").value = formatAddressLine(address);
+    }
+  });
+}
+
+function renderAddressBook() {
+  const host = clientById("addressList");
+  renderCheckoutAddressSelector();
+  if (!host) {
+    return;
+  }
+  if (!clientState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可维护地址簿。</div>`;
+    return;
+  }
+  if (!clientState.addresses.length) {
+    host.innerHTML = `<div class="empty-state">还没有保存地址，填写上方表单后可在结算时直接选择。</div>`;
+    return;
+  }
+  host.innerHTML = clientState.addresses.map((address) => `
+    <article class="address-card ${clientState.selectedAddressId === address.id ? "active" : ""}">
+      <div class="row-top">
+        <strong>${escapeHtml(address.label || "收货地址")}</strong>
+        <div class="product-actions-compact">
+          ${clientState.selectedAddressId === address.id ? `<span class="tag info">当前结算</span>` : ""}
+          <span class="tag ${address.defaultAddress ? "success" : ""}">${address.defaultAddress ? "默认地址" : "常用地址"}</span>
+        </div>
+      </div>
+      <div class="inline-meta">${escapeHtml(address.recipientName)} · ${escapeHtml(address.phone)}</div>
+      <div class="panel-hint">${escapeHtml(address.addressLine)}</div>
+      <div class="product-actions-compact">
+        <button type="button" class="ghost address-edit-btn" data-address-id="${address.id}">编辑</button>
+        ${address.defaultAddress ? "" : `<button type="button" class="ghost address-default-btn" data-address-id="${address.id}">设为默认</button>`}
+        <button type="button" class="ghost address-use-btn" data-address-id="${address.id}">用于结算</button>
+        <button type="button" class="ghost address-delete-btn" data-address-id="${address.id}">删除</button>
+      </div>
+    </article>
+  `).join("");
+  host.querySelectorAll(".address-edit-btn").forEach((button) => {
+    button.addEventListener("click", () => fillAddressForm(Number(button.dataset.addressId)));
+  });
+  host.querySelectorAll(".address-default-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => setDefaultAddress(Number(button.dataset.addressId))));
+  });
+  host.querySelectorAll(".address-use-btn").forEach((button) => {
+    button.addEventListener("click", () => useAddressForCheckout(Number(button.dataset.addressId)));
+  });
+  host.querySelectorAll(".address-delete-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => deleteAddress(Number(button.dataset.addressId))));
+  });
+}
+
+async function saveAddress(event) {
+  event.preventDefault();
+  if (!clientState.user) {
+    throw new Error("请先登录再保存地址");
+  }
+  const payload = readAddressForm();
+  const editingAddressId = clientState.editingAddressId;
+  const selectedAddressId = clientState.selectedAddressId;
+  const saved = editingAddressId == null
+    ? await clientFetchJson("/api/addresses", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+    : await clientFetchJson(`/api/addresses/${editingAddressId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  await refreshCurrentUserProfile();
+  await loadAddresses({
+    preferAddressId: saved.id,
+    forceShippingAddress: Boolean(saved.defaultAddress) || editingAddressId === selectedAddressId || clientState.addresses.length === 1,
+  });
+  resetAddressForm({ silentStatus: true });
+  renderProfile();
+  setStoreStatus(editingAddressId == null ? "地址已保存，可在结算时直接选择" : "地址已更新");
+}
+
+async function setDefaultAddress(addressId) {
+  const updated = await clientFetchJson(`/api/addresses/${addressId}/default`, {
+    method: "PATCH",
+  });
+  await refreshCurrentUserProfile();
+  await loadAddresses({ preferAddressId: updated.id, forceShippingAddress: true });
+  renderProfile();
+  setStoreStatus(`已将 ${updated.label || updated.recipientName} 设为默认地址`);
+}
+
+async function deleteAddress(addressId) {
+  const address = clientState.addresses.find((item) => item.id === addressId);
+  if (!address) {
+    throw new Error("地址不存在");
+  }
+  const formattedAddress = formatAddressLine(address);
+  const usingThisAddress = clientState.selectedAddressId === addressId
+    || clientById("shippingAddress")?.value?.trim() === formattedAddress;
+  await clientFetchJson(`/api/addresses/${addressId}`, {
+    method: "DELETE",
+  });
+  await refreshCurrentUserProfile();
+  await loadAddresses({ forceShippingAddress: usingThisAddress || address.defaultAddress });
+  renderProfile();
+  setStoreStatus(`已删除地址：${address.label || address.recipientName}`);
+}
+
+function useAddressForCheckout(addressId) {
+  const address = clientState.addresses.find((item) => item.id === addressId);
+  if (!address) {
+    throw new Error("地址不存在");
+  }
+  clientState.selectedAddressId = address.id;
+  if (clientById("shippingAddress")) {
+    clientById("shippingAddress").value = formatAddressLine(address);
+  }
+  renderCheckoutAddressSelector();
+  setStoreStatus(`本次结算将使用：${address.label || address.recipientName}`);
 }
 
 function renderOrders() {
@@ -1775,15 +2229,27 @@ function renderAssistantDraft() {
 }
 
 async function loadMe() {
+  const previousUserId = clientState.user?.id || null;
   clientState.user = await clientFetchJson(clientAuthUrl("/api/auth/me"));
+  if ((clientState.user?.id || null) !== previousUserId) {
+    clientState.addresses = [];
+    clientState.selectedAddressId = null;
+    clientState.editingAddressId = null;
+  }
   if (clientState.user) {
     setStoreStatus(`已登录：${clientState.user.displayName || clientState.user.username} · ${clientState.user.role}`);
     clientById("shippingAddress").value = clientState.user.shippingAddress || "";
   } else {
     setStoreStatus("未登录，可先浏览商品");
     clientById("shippingAddress").value = "";
+    clientState.favorites = [];
+    clientState.favoriteProductIds = [];
+    clientState.addresses = [];
+    clientState.selectedAddressId = null;
+    clientState.editingAddressId = null;
   }
   renderProfile();
+  renderFavorites();
 }
 
 async function loadCatalog() {
@@ -2005,6 +2471,7 @@ async function checkout() {
     body: JSON.stringify({
       shippingAddress: clientById("shippingAddress").value.trim(),
       promotionCode: promotionCode || null,
+      addressId: clientState.selectedAddressId || null,
     }),
   });
   syncPromotionInput("");
@@ -2116,6 +2583,10 @@ async function saveProfile(event) {
 function syncProfileAddressToCheckout() {
   const address = clientById("profileShippingAddress").value.trim();
   clientById("shippingAddress").value = address;
+  if (!selectedAddress() || address !== formatAddressLine(selectedAddress())) {
+    clientState.selectedAddressId = null;
+    renderCheckoutAddressSelector();
+  }
   setStoreStatus(address ? "已同步默认地址到本次结算" : "默认地址为空，已清空本次结算地址");
 }
 
@@ -2218,7 +2689,7 @@ async function bootstrapClient() {
   renderAssistantRuntime();
   await loadMe();
   await loadCatalog();
-  await Promise.all([loadCart(), loadOrders(), loadSessions(), loadAssistantRuntime()]);
+  await Promise.all([loadFavorites(), loadAddresses(), loadCart(), loadOrders(), loadSessions(), loadAssistantRuntime()]);
   if (window.location.hash === "#assistant") {
     clientById("assistant")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -2274,8 +2745,18 @@ document.addEventListener("DOMContentLoaded", () => {
   clientById("refreshOrdersBtn").addEventListener("click", () => runClientAction(loadOrders));
   clientById("profileForm").addEventListener("submit", (event) => runClientAction(() => saveProfile(event)));
   clientById("syncAddressBtn").addEventListener("click", syncProfileAddressToCheckout);
+  clientById("addressForm").addEventListener("submit", (event) => runClientAction(() => saveAddress(event)));
+  clientById("resetAddressBtn").addEventListener("click", () => resetAddressForm());
+  clientById("shippingAddress").addEventListener("input", (event) => {
+    const activeAddress = selectedAddress();
+    if (activeAddress && event.target.value.trim() !== formatAddressLine(activeAddress)) {
+      clientState.selectedAddressId = null;
+      renderCheckoutAddressSelector();
+    }
+  });
   document.querySelectorAll(".prompt-btn").forEach((button) => {
     button.addEventListener("click", () => runClientAction(() => sendAssistantMessage(button.dataset.prompt)));
   });
+  updateAddressFormButtons();
   runClientAction(bootstrapClient);
 });

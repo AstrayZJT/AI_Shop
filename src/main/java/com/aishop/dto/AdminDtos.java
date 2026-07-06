@@ -7,6 +7,7 @@ import java.util.List;
 import com.aishop.dto.KnowledgeDtos.SearchResponse;
 import com.aishop.dto.OrderDtos.AfterSalesResponse;
 import com.aishop.dto.OrderDtos.OrderTimelineResponse;
+import com.aishop.dto.ProductDtos.FavoriteProductResponse;
 
 public final class AdminDtos {
     private AdminDtos() {
@@ -74,7 +75,11 @@ public final class AdminDtos {
 
     public record KnowledgeDocumentChunkResponse(Long id,
                                                  String chunkPreview,
-                                                 boolean indexed) {}
+                                                 String chunkText,
+                                                 int characterCount,
+                                                 boolean indexed,
+                                                 int embeddingDimensions,
+                                                 String embeddingPreview) {}
 
     public record KnowledgeDocumentDetailResponse(Long id,
                                                   String title,
@@ -97,6 +102,23 @@ public final class AdminDtos {
                                     String shippingAddress,
                                     String preferencesSummary,
                                     Instant createdAt) {}
+
+    public record AdminCustomerInsightResponse(AdminUserResponse user,
+                                               BigDecimal totalSpend,
+                                               BigDecimal averageOrderAmount,
+                                               long orderCount,
+                                               long paidOrderCount,
+                                               long afterSalesCount,
+                                               long addressCount,
+                                               long favoriteCount,
+                                               long activeAssistantSessionCount,
+                                               long pendingDraftCount,
+                                               String lifecycleStage,
+                                               List<String> riskFlags,
+                                               List<AdminOrderResponse> recentOrders,
+                                               List<AdminAssistantSessionResponse> recentAssistantSessions,
+                                               List<AdminAssistantDraftResponse> recentDrafts,
+                                               List<FavoriteProductResponse> recentFavorites) {}
 
     public record AdminAssistantSessionResponse(Long id,
                                                 String threadId,

@@ -14,8 +14,12 @@ const adminState = {
   knowledgeSearchKeyword: "",
   selectedKnowledgeDocumentId: null,
   selectedKnowledgeDocument: null,
+  selectedKnowledgeChunkId: null,
   knowledgeDetailError: "",
   users: [],
+  selectedCustomerId: null,
+  customerInsight: null,
+  customerInsightError: "",
   assistantSessions: [],
   assistantMessages: [],
   assistantEscalations: [],
@@ -144,6 +148,19 @@ function statusLabel(status) {
   return ADMIN_STATUS_LABELS[status] || status;
 }
 
+function statusTagClass(status) {
+  if (["COMPLETED", "SHIPPED"].includes(status)) {
+    return "success";
+  }
+  if (["REFUND_REQUESTED", "PENDING_PAYMENT", "PENDING_CONFIRMATION"].includes(status)) {
+    return "warning";
+  }
+  if (["REFUNDED", "CANCELLED"].includes(status)) {
+    return "danger";
+  }
+  return "";
+}
+
 function afterSalesStatusLabel(status) {
   return AFTER_SALES_STATUS_LABELS[status] || "售后处理中";
 }
@@ -180,6 +197,39 @@ function adminVectorStoreLabel(runtime) {
     return `pgvector / ${runtime.vectorTable || "knowledge_embeddings"}`;
   }
   return "内存向量库";
+}
+
+function knowledgeMatchModeLabel(mode) {
+  switch ((mode || "").toUpperCase()) {
+    case "HYBRID":
+      return "混合命中";
+    case "VECTOR":
+      return "向量召回";
+    default:
+      return "关键词命中";
+  }
+}
+
+function knowledgeMatchModeTagClass(mode) {
+  switch ((mode || "").toUpperCase()) {
+    case "HYBRID":
+      return "success";
+    case "VECTOR":
+      return "info";
+    default:
+      return "";
+  }
+}
+
+function formatKnowledgeScore(score) {
+  if (typeof score !== "number" || Number.isNaN(score)) {
+    return "";
+  }
+  return score.toFixed(3);
+}
+
+function knowledgeChunkAnchorId(chunkId) {
+  return `knowledgeChunk-${chunkId}`;
 }
 
 function assistantServiceTagClass(status) {
@@ -2093,19 +2143,27 @@ function renderKnowledgeDetail() {
     <div class="section-head compact">
       <div>
         <h3>${escapeHtml(detail.title)}</h3>
-        <p>${escapeHtml(detail.docType)} 路 原文 ${escapeHtml(detail.contentLength)} 字 路 切块 ${escapeHtml(detail.chunkCount)} 路 已索引 ${escapeHtml(detail.indexedChunkCount)}</p>
+        <p>${escapeHtml(detail.docType)} · 原文 ${escapeHtml(detail.contentLength)} 字 · 切块 ${escapeHtml(detail.chunkCount)} · 已索引 ${escapeHtml(detail.indexedChunkCount)}</p>
       </div>
       <button id="reindexKnowledgeInlineBtn" type="button" class="ghost">重建索引</button>
     </div>
     <div class="knowledge-content-block">${escapeHtml(detail.content)}</div>
     <div class="knowledge-chunk-list">
       ${(detail.chunks || []).map((chunk) => `
-        <div class="knowledge-chunk-card">
+        <div id="${escapeHtml(knowledgeChunkAnchorId(chunk.id))}" class="knowledge-chunk-card ${adminState.selectedKnowledgeChunkId === chunk.id ? "active" : ""}">
           <div class="row-top">
             <strong>片段 #${escapeHtml(chunk.id)}</strong>
-            <div class="tag ${chunk.indexed ? "success" : "warning"}">${chunk.indexed ? "已入索引" : "待补索引"}</div>
+            <div class="knowledge-chunk-tags">
+              <div class="tag ${chunk.indexed ? "success" : "warning"}">${chunk.indexed ? "已入索引" : "待补索引"}</div>
+              <div class="tag">字数 ${escapeHtml(chunk.characterCount || 0)}</div>
+              <div class="tag ${chunk.embeddingDimensions ? "info" : "warning"}">向量 ${escapeHtml(chunk.embeddingDimensions || 0)} 维</div>
+            </div>
           </div>
-          <div class="inline-meta">${escapeHtml(chunk.chunkPreview)}</div>
+          <div class="knowledge-chunk-text">${escapeHtml(chunk.chunkText || chunk.chunkPreview)}</div>
+          <details class="knowledge-vector-preview">
+            <summary>查看 embedding 缓存预览</summary>
+            <code>${escapeHtml(chunk.embeddingPreview || "[]")}</code>
+          </details>
         </div>
       `).join("")}
     </div>
@@ -2116,52 +2174,79 @@ function renderKnowledgeDetail() {
 
 function renderKnowledgeSearchResults() {
   const host = adminById("knowledgeSearchResults");
+  const meta = adminById("knowledgeSearchMeta");
   if (!host) {
     return;
   }
   if (!adminState.user) {
     host.innerHTML = `<div class="empty-state">管理员登录后可测试知识库的向量检索效果。</div>`;
+    if (meta) {
+      meta.textContent = "登录管理端后可以查看检索命中来源、分数和索引状态。";
+    }
     return;
   }
   if (!adminState.knowledgeSearchKeyword) {
     host.innerHTML = `<div class="empty-state">输入关键词，看看 AI 客服会命中哪些知识片段。</div>`;
+    if (meta) {
+      meta.textContent = "这里会显示当前查询的命中来源、分数和索引状态。";
+    }
     return;
   }
   if (!adminState.knowledgeMatches.length) {
     host.innerHTML = `<div class="empty-state">没有命中相关知识片段，换一个关键词再试试。</div>`;
+    if (meta) {
+      meta.textContent = `查询“${adminState.knowledgeSearchKeyword}”没有命中片段。`;
+    }
     return;
+  }
+
+  const modeCounts = adminState.knowledgeMatches.reduce((acc, match) => {
+    const mode = (match.matchMode || "TEXT").toUpperCase();
+    acc[mode] = (acc[mode] || 0) + 1;
+    return acc;
+  }, {});
+  if (meta) {
+    meta.textContent = `查询“${adminState.knowledgeSearchKeyword}”命中 ${adminState.knowledgeMatches.length} 个片段：混合 ${modeCounts.HYBRID || 0}，向量 ${modeCounts.VECTOR || 0}，关键词 ${modeCounts.TEXT || 0}。`;
   }
 
   host.innerHTML = adminState.knowledgeMatches.map((match) => `
     <div class="knowledge-item knowledge-match">
       <div class="row-top">
         <strong>${escapeHtml(match.title)}</strong>
-        <div class="tag">命中片段</div>
+        <div class="knowledge-match-tags">
+          <div class="tag ${knowledgeMatchModeTagClass(match.matchMode)}">${escapeHtml(knowledgeMatchModeLabel(match.matchMode))}</div>
+          ${formatKnowledgeScore(match.score) ? `<div class="tag">分数 ${escapeHtml(formatKnowledgeScore(match.score))}</div>` : ""}
+          <div class="tag ${match.indexed === false ? "warning" : "success"}">${match.indexed === false ? "未入索引" : "已索引"}</div>
+          ${match.embeddingDimensions ? `<div class="tag info">${escapeHtml(match.embeddingDimensions)} 维</div>` : ""}
+        </div>
       </div>
+      ${match.matchedTerms ? `<div class="inline-meta">命中词 ${escapeHtml(match.matchedTerms)}</div>` : ""}
       <div class="inline-meta">${escapeHtml(match.chunkText)}</div>
       ${match.documentId ? `
         <div class="row-bottom">
-          <button type="button" class="ghost knowledge-match-open-btn" data-doc-id="${match.documentId}">打开原文</button>
+          <button type="button" class="ghost knowledge-match-open-btn" data-doc-id="${match.documentId}" data-chunk-id="${match.id || ""}">定位原文片段</button>
         </div>
       ` : ""}
     </div>
   `).join("");
 
   host.querySelectorAll(".knowledge-match-open-btn").forEach((button) => {
-    button.addEventListener("click", () => runAdminAction(() => openKnowledgeDocument(Number(button.dataset.docId), true)));
+    button.addEventListener("click", () => runAdminAction(() => openKnowledgeDocument(Number(button.dataset.docId), true, Number(button.dataset.chunkId))));
   });
 }
 
-async function openKnowledgeDocument(docId, shouldScroll = false) {
+async function openKnowledgeDocument(docId, shouldScroll = false, chunkId = null) {
   if (!docId) {
     adminState.selectedKnowledgeDocumentId = null;
     adminState.selectedKnowledgeDocument = null;
+    adminState.selectedKnowledgeChunkId = null;
     adminState.knowledgeDetailError = "";
     renderKnowledgeDocs();
     renderKnowledgeDetail();
     return;
   }
   adminState.selectedKnowledgeDocumentId = docId;
+  adminState.selectedKnowledgeChunkId = chunkId || null;
   try {
     adminState.selectedKnowledgeDocument = await adminFetchJson(`/api/admin/knowledge/documents/${docId}`);
     adminState.knowledgeDetailError = "";
@@ -2171,6 +2256,10 @@ async function openKnowledgeDocument(docId, shouldScroll = false) {
   }
   renderKnowledgeDocs();
   renderKnowledgeDetail();
+  if (shouldScroll && chunkId) {
+    adminById(knowledgeChunkAnchorId(chunkId))?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
   if (shouldScroll) {
     adminById("knowledgeDetailPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -2202,15 +2291,220 @@ function renderUsers() {
   }
 
   host.innerHTML = adminState.users.map((user) => `
-    <div class="user-row">
+    <div class="user-row ${adminState.selectedCustomerId === user.id ? "active" : ""}">
       <div class="row-top">
         <strong>${escapeHtml(user.displayName || user.username)}</strong>
         <div class="tag">${escapeHtml(user.role)}</div>
       </div>
-      <div class="inline-meta">${escapeHtml(user.username)}</div>
+      <div class="inline-meta">${escapeHtml(user.username)} · ${escapeHtml(user.phone || "未填写手机号")}</div>
       <div class="inline-meta">${escapeHtml(user.shippingAddress || "未填写地址")}</div>
+      ${user.preferencesSummary ? `<div class="inline-meta">偏好 ${escapeHtml(user.preferencesSummary)}</div>` : ""}
+      <div class="row-bottom">
+        <button type="button" class="${adminState.selectedCustomerId === user.id ? "secondary" : "ghost"} customer-insight-btn" data-user-id="${user.id}">
+          ${adminState.selectedCustomerId === user.id ? "当前画像" : "查看画像"}
+        </button>
+      </div>
     </div>
   `).join("");
+
+  host.querySelectorAll(".customer-insight-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => loadCustomerInsight(Number(button.dataset.userId))));
+  });
+}
+
+function renderCustomerInsight() {
+  const host = adminById("adminCustomerInsightPanel");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看客户画像。</div>`;
+    return;
+  }
+  if (adminState.customerInsightError) {
+    host.innerHTML = `<div class="empty-state">${escapeHtml(adminState.customerInsightError)}</div>`;
+    return;
+  }
+  const insight = adminState.customerInsight;
+  if (!insight) {
+    host.innerHTML = `<div class="empty-state">选择用户后，这里会展示客户画像、最近订单、AI 会话和下单草稿。</div>`;
+    return;
+  }
+  const user = insight.user || {};
+  host.innerHTML = `
+    <section class="customer-insight-card">
+      <div class="section-head compact">
+        <div>
+          <h3>${escapeHtml(user.displayName || user.username || "客户画像")}</h3>
+          <p>${escapeHtml(user.username || "")} · ${escapeHtml(user.phone || "未填写手机号")} · ${escapeHtml(insight.lifecycleStage || "客户")}</p>
+        </div>
+        <div class="tag info">${escapeHtml(user.role || "CUSTOMER")}</div>
+      </div>
+      <div class="customer-insight-metrics">
+        ${customerInsightMetric("累计消费", money(insight.totalSpend))}
+        ${customerInsightMetric("客单价", money(insight.averageOrderAmount))}
+        ${customerInsightMetric("订单数", `${insight.orderCount || 0} 单`)}
+        ${customerInsightMetric("售后", `${insight.afterSalesCount || 0} 个`)}
+        ${customerInsightMetric("地址", `${insight.addressCount || 0} 个`)}
+        ${customerInsightMetric("收藏", `${insight.favoriteCount || 0} 件`)}
+        ${customerInsightMetric("AI 会话", `${insight.activeAssistantSessionCount || 0} 个活跃`)}
+        ${customerInsightMetric("AI 草稿", `${insight.pendingDraftCount || 0} 个待确认`)}
+      </div>
+      <div class="customer-risk-tags">
+        ${(insight.riskFlags || []).map((flag) => `<span class="tag ${flag === "暂无明显风险" ? "success" : "warning"}">${escapeHtml(flag)}</span>`).join("")}
+      </div>
+      <div class="assistant-context-grid customer-context-grid">
+        ${renderCustomerInsightOrders(insight.recentOrders || [])}
+        ${renderCustomerInsightSessions(insight.recentAssistantSessions || [])}
+        ${renderCustomerInsightDrafts(insight.recentDrafts || [])}
+        ${renderCustomerInsightFavorites(insight.recentFavorites || [])}
+      </div>
+    </section>
+  `;
+
+  host.querySelectorAll(".customer-order-locate-btn").forEach((button) => {
+    button.addEventListener("click", () => locateCustomerOrder(button.dataset.orderNo || ""));
+  });
+  host.querySelectorAll(".customer-session-open-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => selectAssistantSession(Number(button.dataset.sessionId), true)));
+  });
+}
+
+function customerInsightMetric(label, value) {
+  return `
+    <div class="assistant-meta-item">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `;
+}
+
+function renderCustomerInsightOrders(orders) {
+  if (!orders.length) {
+    return `
+      <article class="assistant-context-card">
+        <div class="assistant-context-title">最近订单</div>
+        <div class="panel-hint">该客户还没有订单，可结合商品推荐和优惠活动继续转化。</div>
+      </article>
+    `;
+  }
+  return `
+    <article class="assistant-context-card">
+      <div class="assistant-context-title">最近订单</div>
+      <div class="assistant-context-list">
+        ${orders.map((order) => `
+          <div class="assistant-order-mini">
+            <div class="row-top">
+              <strong>${escapeHtml(order.orderNo)}</strong>
+              <span class="tag ${statusTagClass(order.status)}">${escapeHtml(statusLabel(order.status))}</span>
+            </div>
+            <div class="inline-meta">${money(order.totalAmount)} · ${escapeHtml(formatDateTime(order.createdAt))}</div>
+            <button type="button" class="ghost customer-order-locate-btn" data-order-no="${escapeHtml(order.orderNo)}">定位订单</button>
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderCustomerInsightSessions(sessions) {
+  if (!sessions.length) {
+    return `
+      <article class="assistant-context-card">
+        <div class="assistant-context-title">AI 会话</div>
+        <div class="panel-hint">还没有 AI 咨询记录。</div>
+      </article>
+    `;
+  }
+  return `
+    <article class="assistant-context-card">
+      <div class="assistant-context-title">AI 会话</div>
+      <div class="assistant-context-list">
+        ${sessions.map((session) => `
+          <div class="assistant-order-mini">
+            <div class="row-top">
+              <strong>${escapeHtml(session.title || session.threadId)}</strong>
+              <span class="tag ${assistantServiceTagClass(session.serviceStatus)}">${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</span>
+            </div>
+            <div class="inline-meta">${escapeHtml(session.lastIntent || "unknown")} · 消息 ${escapeHtml(session.messageCount || 0)}</div>
+            <button type="button" class="ghost customer-session-open-btn" data-session-id="${session.id}">查看会话</button>
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderCustomerInsightDrafts(drafts) {
+  if (!drafts.length) {
+    return `
+      <article class="assistant-context-card">
+        <div class="assistant-context-title">AI 下单草稿</div>
+        <div class="panel-hint">当前没有待跟进草稿。</div>
+      </article>
+    `;
+  }
+  return `
+    <article class="assistant-context-card">
+      <div class="assistant-context-title">AI 下单草稿</div>
+      <div class="assistant-context-list">
+        ${drafts.map((draft) => `
+          <div class="assistant-order-mini">
+            <div class="row-top">
+              <strong>${escapeHtml(draft.productName || "草稿商品")}</strong>
+              <span class="tag ${draft.status === "PENDING_CONFIRMATION" ? "warning" : "success"}">${escapeHtml(draft.status)}</span>
+            </div>
+            <div class="inline-meta">${escapeHtml(draft.quantity || 1)} 件 · ${money(draft.totalAmount)} · ${escapeHtml(formatDateTime(draft.createdAt))}</div>
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderCustomerInsightFavorites(favorites) {
+  if (!favorites.length) {
+    return `
+      <article class="assistant-context-card">
+        <div class="assistant-context-title">最近收藏</div>
+        <div class="panel-hint">该客户还没有收藏商品。</div>
+      </article>
+    `;
+  }
+  return `
+    <article class="assistant-context-card">
+      <div class="assistant-context-title">最近收藏</div>
+      <div class="assistant-context-list">
+        ${favorites.map((favorite) => {
+          const product = favorite.product || {};
+          return `
+            <div class="assistant-order-mini">
+              <div class="row-top">
+                <strong>${escapeHtml(product.name || "收藏商品")}</strong>
+                <span class="tag">${money(product.price)}</span>
+              </div>
+              <div class="inline-meta">${escapeHtml(product.category || "未分类")} · 库存 ${escapeHtml(product.stock || 0)}</div>
+              <div class="inline-meta">收藏时间 ${escapeHtml(formatDateTime(favorite.createdAt))}</div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function locateCustomerOrder(orderNo) {
+  if (!orderNo) {
+    return;
+  }
+  adminState.orderFilterKeyword = orderNo;
+  adminState.orderFilterStatus = "ALL";
+  if (adminById("adminOrderSearchInput")) {
+    adminById("adminOrderSearchInput").value = orderNo;
+  }
+  renderOrderFilterTabs();
+  renderOrders();
+  adminById("ordersList")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function resetProductForm() {
@@ -2306,8 +2600,12 @@ function clearAdminDataState() {
   adminState.knowledgeSearchKeyword = "";
   adminState.selectedKnowledgeDocumentId = null;
   adminState.selectedKnowledgeDocument = null;
+  adminState.selectedKnowledgeChunkId = null;
   adminState.knowledgeDetailError = "";
   adminState.users = [];
+  adminState.selectedCustomerId = null;
+  adminState.customerInsight = null;
+  adminState.customerInsightError = "";
   adminState.assistantSessions = [];
   adminState.assistantMessages = [];
   adminState.assistantEscalations = [];
@@ -2336,6 +2634,7 @@ async function loadAdminData() {
     renderKnowledgeDetail();
     renderKnowledgeSearchResults();
     renderUsers();
+    renderCustomerInsight();
     return;
   }
 
@@ -2357,6 +2656,7 @@ async function loadAdminData() {
   const knowledgeDocStillVisible = adminState.knowledgeDocs.some((doc) => doc.id === adminState.selectedKnowledgeDocumentId);
   if (!knowledgeDocStillVisible) {
     adminState.selectedKnowledgeDocumentId = adminState.knowledgeDocs[0]?.id || null;
+    adminState.selectedKnowledgeChunkId = null;
   }
   if (adminState.selectedKnowledgeDocumentId) {
     try {
@@ -2368,9 +2668,24 @@ async function loadAdminData() {
     }
   } else {
     adminState.selectedKnowledgeDocument = null;
+    adminState.selectedKnowledgeChunkId = null;
     adminState.knowledgeDetailError = "";
   }
   adminState.users = users || [];
+  const selectedCustomerStillVisible = adminState.users.some((user) => user.id === adminState.selectedCustomerId);
+  if (!selectedCustomerStillVisible) {
+    adminState.selectedCustomerId = null;
+    adminState.customerInsight = null;
+    adminState.customerInsightError = "";
+  } else if (adminState.selectedCustomerId) {
+    try {
+      adminState.customerInsight = await adminFetchJson(`/api/admin/users/${adminState.selectedCustomerId}/insight`);
+      adminState.customerInsightError = "";
+    } catch (error) {
+      adminState.customerInsight = null;
+      adminState.customerInsightError = error?.message || "客户画像加载失败";
+    }
+  }
   adminState.assistantSessions = assistantSessions || [];
   adminState.assistantEscalations = assistantEscalations || [];
   adminState.assistantDrafts = assistantDrafts || [];
@@ -2421,6 +2736,7 @@ async function loadAdminData() {
   renderKnowledgeDetail();
   renderKnowledgeSearchResults();
   renderUsers();
+  renderCustomerInsight();
 }
 
 async function applyAssistantOpsFilter(filterKey) {
@@ -2447,6 +2763,22 @@ async function selectAssistantSession(sessionId, scrollIntoView = false) {
   if (scrollIntoView) {
     adminById("adminAssistantMessages")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
+}
+
+async function loadCustomerInsight(userId) {
+  adminState.selectedCustomerId = userId;
+  adminState.customerInsightError = "";
+  renderUsers();
+  renderCustomerInsight();
+  try {
+    adminState.customerInsight = await adminFetchJson(`/api/admin/users/${userId}/insight`);
+  } catch (error) {
+    adminState.customerInsight = null;
+    adminState.customerInsightError = error?.message || "客户画像加载失败";
+  }
+  renderUsers();
+  renderCustomerInsight();
+  adminById("adminCustomerInsightPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function adminLogin() {
@@ -2752,6 +3084,7 @@ async function saveKnowledge(event) {
   adminById("knowledgeContent").value = "";
   adminState.selectedKnowledgeDocumentId = null;
   adminState.selectedKnowledgeDocument = null;
+  adminState.selectedKnowledgeChunkId = null;
   await loadAdminData();
   if (adminById("knowledgeSearchInput").value.trim()) {
     await searchKnowledge();

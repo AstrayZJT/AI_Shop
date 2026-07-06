@@ -8,7 +8,14 @@ public final class AssistantDtos {
     }
 
     public record ChatRequest(Long sessionId, String message, String threadId) {}
-    public record KnowledgeSourceResponse(Long chunkId, Long documentId, String title, String chunkText) {}
+    public record KnowledgeSourceResponse(Long chunkId,
+                                          Long documentId,
+                                          String title,
+                                          String chunkText,
+                                          String matchMode,
+                                          Double score,
+                                          String matchedTerms,
+                                          boolean indexed) {}
     public record SuggestedActionResponse(String key, String label, String prompt, String kind) {}
     public record ChatResponse(Long sessionId,
                                String answer,

@@ -1,6 +1,7 @@
 package com.aishop.service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
@@ -21,6 +22,7 @@ import com.aishop.domain.ShopOrder;
 import com.aishop.dto.AdminDtos.AdminAssistantDraftResponse;
 import com.aishop.dto.AdminDtos.AdminAssistantMessageResponse;
 import com.aishop.dto.AdminDtos.AdminAssistantSessionResponse;
+import com.aishop.dto.AdminDtos.AdminCustomerInsightResponse;
 import com.aishop.dto.AdminDtos.AdminOrderItemResponse;
 import com.aishop.dto.AdminDtos.AdminOrderResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
@@ -65,6 +67,8 @@ public class AdminService {
     private final KnowledgeIndexSynchronizer knowledgeIndexSynchronizer;
     private final OrderTimelineService orderTimelineService;
     private final AfterSalesService afterSalesService;
+    private final ProductFavoriteService favoriteService;
+    private final ShippingAddressService shippingAddressService;
 
     public AdminService(AppUserRepository userRepository,
                         AssistantSessionRepository assistantSessionRepository,
@@ -79,7 +83,9 @@ public class AdminService {
                         KnowledgeService knowledgeService,
                         KnowledgeIndexSynchronizer knowledgeIndexSynchronizer,
                         OrderTimelineService orderTimelineService,
-                        AfterSalesService afterSalesService) {
+                        AfterSalesService afterSalesService,
+                        ProductFavoriteService favoriteService,
+                        ShippingAddressService shippingAddressService) {
         this.userRepository = userRepository;
         this.assistantSessionRepository = assistantSessionRepository;
         this.assistantMessageRepository = assistantMessageRepository;
@@ -94,6 +100,8 @@ public class AdminService {
         this.knowledgeIndexSynchronizer = knowledgeIndexSynchronizer;
         this.orderTimelineService = orderTimelineService;
         this.afterSalesService = afterSalesService;
+        this.favoriteService = favoriteService;
+        this.shippingAddressService = shippingAddressService;
     }
 
     @Transactional(readOnly = true)
@@ -316,7 +324,11 @@ public class AdminService {
                         .map(chunk -> new KnowledgeDocumentChunkResponse(
                                 chunk.getId(),
                                 trim(chunk.getChunkText(), 180),
-                                chunkIndexed(chunk)))
+                                chunk.getChunkText(),
+                                chunk.getChunkText() == null ? 0 : chunk.getChunkText().length(),
+                                chunkIndexed(chunk),
+                                estimateEmbeddingDimensions(chunk.getEmbeddingJson()),
+                                embeddingPreview(chunk.getEmbeddingJson())))
                         .toList());
     }
 
@@ -334,6 +346,53 @@ public class AdminService {
         return userRepository.findAllByOrderByCreatedAtDesc().stream()
                 .map(this::toAdminUserResponse)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public AdminCustomerInsightResponse customerInsight(Long userId) {
+        AppUser user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        List<ShopOrder> orders = orderRepository.findByUserOrderByCreatedAtDesc(user);
+        List<AssistantSession> sessions = assistantSessionRepository.findByUserOrderByCreatedAtDesc(user);
+        List<PendingOrderDraft> drafts = pendingOrderDraftRepository.findTop10ByUserOrderByCreatedAtDesc(user);
+        List<ShopOrder> revenueOrders = orders.stream()
+                .filter(this::countsTowardRevenue)
+                .toList();
+        BigDecimal totalSpend = revenueOrders.stream()
+                .map(ShopOrder::getTotalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal averageOrderAmount = revenueOrders.isEmpty()
+                ? BigDecimal.ZERO
+                : totalSpend.divide(BigDecimal.valueOf(revenueOrders.size()), 2, RoundingMode.HALF_UP);
+        long afterSalesCount = orders.stream()
+                .filter(this::hasAfterSalesRisk)
+                .count();
+        long activeSessionCount = sessions.stream()
+                .filter(session -> !SERVICE_STATUS_RESOLVED.equals(normalizeServiceStatus(session.getServiceStatus())))
+                .count();
+        long pendingDraftCount = drafts.stream()
+                .filter(draft -> "PENDING_CONFIRMATION".equalsIgnoreCase(draft.getStatus()))
+                .count();
+        long addressCount = shippingAddressService.count(user);
+        long favoriteCount = favoriteService.favoriteCount(user);
+
+        return new AdminCustomerInsightResponse(
+                toAdminUserResponse(user),
+                totalSpend,
+                averageOrderAmount,
+                orders.size(),
+                revenueOrders.size(),
+                afterSalesCount,
+                addressCount,
+                favoriteCount,
+                activeSessionCount,
+                pendingDraftCount,
+                customerLifecycleStage(orders, sessions, pendingDraftCount, favoriteCount),
+                customerRiskFlags(user, orders, sessions, pendingDraftCount, favoriteCount),
+                orders.stream().limit(5).map(this::toAdminOrderResponse).toList(),
+                sessions.stream().limit(5).map(this::toAdminAssistantSessionResponse).toList(),
+                drafts.stream().limit(5).map(this::toAdminAssistantDraftResponse).toList(),
+                favoriteService.listFavorites(user).stream().limit(5).toList());
     }
 
     @Transactional(readOnly = true)
@@ -764,6 +823,111 @@ public class AdminService {
         return embeddingJson != null
                 && !embeddingJson.isBlank()
                 && !"[]".equals(embeddingJson.trim());
+    }
+
+    private int estimateEmbeddingDimensions(String embeddingJson) {
+        if (embeddingJson == null) {
+            return 0;
+        }
+        String trimmed = embeddingJson.trim();
+        if (trimmed.isBlank() || "[]".equals(trimmed)) {
+            return 0;
+        }
+        String body = trimmed;
+        if (body.startsWith("[")) {
+            body = body.substring(1);
+        }
+        if (body.endsWith("]")) {
+            body = body.substring(0, body.length() - 1);
+        }
+        if (body.isBlank()) {
+            return 0;
+        }
+        return (int) java.util.Arrays.stream(body.split(","))
+                .map(String::trim)
+                .filter(token -> !token.isEmpty())
+                .count();
+    }
+
+    private String embeddingPreview(String embeddingJson) {
+        String trimmed = blankToNull(embeddingJson);
+        if (trimmed == null || "[]".equals(trimmed)) {
+            return "[]";
+        }
+        return trim(trimmed, 120);
+    }
+
+    private boolean hasAfterSalesRisk(ShopOrder order) {
+        return order.getStatus() == OrderStatus.REFUND_REQUESTED
+                || order.getStatus() == OrderStatus.REFUNDED
+                || afterSalesService.getCase(order) != null;
+    }
+
+    private String customerLifecycleStage(List<ShopOrder> orders,
+                                          List<AssistantSession> sessions,
+                                          long pendingDraftCount,
+                                          long favoriteCount) {
+        long paidOrderCount = orders.stream().filter(this::countsTowardRevenue).count();
+        boolean hasOpenSupport = sessions.stream()
+                .anyMatch(session -> SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus())));
+        if (hasOpenSupport) {
+            return "人工跟进中";
+        }
+        if (pendingDraftCount > 0) {
+            return "AI 转化中";
+        }
+        if (favoriteCount > 0 && paidOrderCount == 0) {
+            return "收藏培育中";
+        }
+        if (paidOrderCount >= 3) {
+            return "高价值复购";
+        }
+        if (paidOrderCount > 0) {
+            return "已成交客户";
+        }
+        if (!sessions.isEmpty()) {
+            return "咨询培育中";
+        }
+        return "新客户";
+    }
+
+    private List<String> customerRiskFlags(AppUser user,
+                                           List<ShopOrder> orders,
+                                           List<AssistantSession> sessions,
+                                           long pendingDraftCount,
+                                           long favoriteCount) {
+        List<String> flags = new java.util.ArrayList<>();
+        if (blankToNull(user.getShippingAddress()) == null) {
+            flags.add("未维护默认收货地址");
+        }
+        long openAfterSalesCount = orders.stream()
+                .filter(order -> order.getStatus() == OrderStatus.REFUND_REQUESTED)
+                .count();
+        if (openAfterSalesCount > 0) {
+            flags.add("有 " + openAfterSalesCount + " 个售后待处理");
+        }
+        long escalatedCount = sessions.stream()
+                .filter(session -> SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus())))
+                .count();
+        if (escalatedCount > 0) {
+            flags.add("有 " + escalatedCount + " 个 AI 会话等待人工");
+        }
+        long supportUnread = sessions.stream()
+                .mapToLong(session -> safeCount(session.getSupportUnreadCount()))
+                .sum();
+        if (supportUnread > 0) {
+            flags.add("客服侧未读 " + supportUnread + " 条");
+        }
+        if (pendingDraftCount > 0) {
+            flags.add("有 " + pendingDraftCount + " 个待确认 AI 下单草稿");
+        }
+        if (favoriteCount > 0 && orders.isEmpty()) {
+            flags.add("已收藏 " + favoriteCount + " 件商品但尚未下单");
+        }
+        if (flags.isEmpty()) {
+            flags.add("暂无明显风险");
+        }
+        return flags;
     }
 
     private void restoreStockForOrder(ShopOrder order) {

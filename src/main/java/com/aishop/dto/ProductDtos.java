@@ -19,6 +19,9 @@ public final class ProductDtos {
                                   Double averageRating,
                                   Long reviewCount,
                                   String reviewSummary) {}
+    public record FavoriteProductResponse(Long favoriteId,
+                                          Instant createdAt,
+                                          ProductResponse product) {}
     public record ProductReviewRequest(Integer rating, String content) {}
     public record ProductReviewResponse(Long id,
                                         Long productId,

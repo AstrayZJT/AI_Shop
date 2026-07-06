@@ -51,6 +51,7 @@ public class AssistantService {
     private final ProductService productService;
     private final KnowledgeService knowledgeService;
     private final PromotionService promotionService;
+    private final ProductFavoriteService favoriteService;
     private final CompiledGraph<MessagesState<String>> assistantGraph;
     private final ChatModel chatModel;
 
@@ -60,6 +61,7 @@ public class AssistantService {
                             ProductService productService,
                             KnowledgeService knowledgeService,
                             PromotionService promotionService,
+                            ProductFavoriteService favoriteService,
                             CompiledGraph<MessagesState<String>> assistantGraph,
                             ChatModel chatModel) {
         this.sessionRepository = sessionRepository;
@@ -68,6 +70,7 @@ public class AssistantService {
         this.productService = productService;
         this.knowledgeService = knowledgeService;
         this.promotionService = promotionService;
+        this.favoriteService = favoriteService;
         this.assistantGraph = assistantGraph;
         this.chatModel = chatModel;
     }
@@ -146,6 +149,7 @@ public class AssistantService {
 
         var intent = detectIntent(message);
         var matchedProducts = productService.search(message).stream().limit(3).toList();
+        var favoriteProducts = favoriteService.recentFavoriteProducts(user, 3);
         var allOrders = orderService.listOrders(user);
         var recentOrders = allOrders.stream().limit(3).toList();
         var exactOrder = findExactMentionedOrder(message, allOrders);
@@ -168,7 +172,7 @@ public class AssistantService {
         }
 
         var answer = actionExecution == null
-                ? buildPendingHandoffAnswer(session, user, intent, sourceTexts, matchedProducts, recentOrders, exactOrder, message, currentThreadId)
+                ? buildPendingHandoffAnswer(session, user, intent, sourceTexts, matchedProducts, favoriteProducts, recentOrders, exactOrder, message, currentThreadId)
                 : actionExecution.answer();
         var draftJson = actionExecution == null && !SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))
                 ? buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts, requestedQuantity)
@@ -234,6 +238,7 @@ public class AssistantService {
                                              String intent,
                                              List<String> sources,
                                              List<ProductResponse> matchedProducts,
+                                             List<ProductResponse> favoriteProducts,
                                              List<OrderResponse> recentOrders,
                                              OrderResponse exactOrder,
                                              String message,
@@ -241,13 +246,14 @@ public class AssistantService {
         if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
             return "你的会话已经转给人工客服，我会把这条补充信息同步给人工同事，请稍候查看人工回复。";
         }
-        return buildAnswer(user, intent, sources, matchedProducts, recentOrders, exactOrder, message, threadId);
+        return buildAnswer(user, intent, sources, matchedProducts, favoriteProducts, recentOrders, exactOrder, message, threadId);
     }
 
     private String buildAnswer(AppUser user,
                                String intent,
                                List<String> sources,
                                List<ProductResponse> matchedProducts,
+                               List<ProductResponse> favoriteProducts,
                                List<OrderResponse> recentOrders,
                                OrderResponse exactOrder,
                                String message,
@@ -288,11 +294,17 @@ public class AssistantService {
             return "我帮你查到了最近的订单：" + formatOrders(recentOrders);
         }
         if ("order".equals(intent) && isPurchaseIntent(message)) {
-            var product = matchedProducts.isEmpty() ? productService.listAll().stream().findFirst().orElse(null) : matchedProducts.get(0);
+            var product = matchedProducts.isEmpty()
+                    ? (favoriteProducts.isEmpty() ? productService.listAll().stream().findFirst().orElse(null) : favoriteProducts.get(0))
+                    : matchedProducts.get(0);
             if (product != null) {
                 return "我已经为你准备了下单草稿，推荐商品是：%s，价格 %s。%s你确认后我就继续创建正式订单。"
                         .formatted(product.name(), product.price(), bestPromotionHint(product.price()));
             }
+        }
+        if ("product".equals(intent) && matchedProducts.isEmpty() && !favoriteProducts.isEmpty()) {
+            return "结合你最近收藏的商品，我建议先看这些：" + formatProducts(favoriteProducts)
+                    + "。这些都在你的收藏里，适合继续比较价格、库存和口碑，也可以让我直接生成下单草稿。";
         }
         if ("product".equals(intent) && !matchedProducts.isEmpty()) {
             if (matchedProducts.size() == 1) {
@@ -319,6 +331,7 @@ public class AssistantService {
                 意图：%s
                 默认收货地址：%s
                 候选商品：%s
+                最近收藏：%s
                 最近订单：%s
                 当前活动：%s
                 相关知识：%s
@@ -330,6 +343,7 @@ public class AssistantService {
                 intent,
                 user.getShippingAddress() == null ? "未填写" : user.getShippingAddress(),
                 matchedProducts.isEmpty() ? "无" : formatProducts(matchedProducts),
+                favoriteProducts.isEmpty() ? "无" : formatProducts(favoriteProducts),
                 recentOrders.isEmpty() ? "无" : formatOrders(recentOrders),
                 summarizePromotionsForPrompt(focusOrder, recentOrders, matchedProducts),
                 sources.isEmpty() ? "无" : String.join(" | ", sources));
@@ -515,7 +529,11 @@ public class AssistantService {
                 response.id(),
                 response.documentId(),
                 response.title(),
-                trim(response.chunkText(), 220));
+                trim(response.chunkText(), 220),
+                response.matchMode(),
+                response.score(),
+                response.matchedTerms(),
+                response.indexed());
     }
 
     private List<SuggestedActionResponse> buildSuggestedActions(AssistantSession session,

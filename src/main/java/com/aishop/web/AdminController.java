@@ -17,6 +17,7 @@ import com.aishop.dto.AdminDtos.AdminAssistantMessageResponse;
 import com.aishop.dto.AdminDtos.AdminAssistantAssignRequest;
 import com.aishop.dto.AdminDtos.AdminAssistantReplyRequest;
 import com.aishop.dto.AdminDtos.AdminAssistantSessionResponse;
+import com.aishop.dto.AdminDtos.AdminCustomerInsightResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
 import com.aishop.dto.AdminDtos.DashboardMetricResponse;
 import com.aishop.dto.AdminDtos.KnowledgeDocumentResponse;
@@ -187,6 +188,12 @@ public class AdminController {
     public List<AdminUserResponse> users(HttpSession session) {
         authService.requireAdmin(session);
         return adminService.listUsers();
+    }
+
+    @GetMapping("/api/admin/users/{id}/insight")
+    public AdminCustomerInsightResponse customerInsight(HttpSession session, @PathVariable Long id) {
+        authService.requireAdmin(session);
+        return adminService.customerInsight(id);
     }
 
     @GetMapping("/api/admin/reviews")

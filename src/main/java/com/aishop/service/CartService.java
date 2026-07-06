@@ -35,6 +35,7 @@ public class CartService {
     private final OrderService orderService;
     private final OrderTimelineService orderTimelineService;
     private final PromotionService promotionService;
+    private final ShippingAddressService shippingAddressService;
 
     public CartService(CartRepository cartRepository,
                        CartItemRepository cartItemRepository,
@@ -43,7 +44,8 @@ public class CartService {
                        OrderItemRepository orderItemRepository,
                        OrderService orderService,
                        OrderTimelineService orderTimelineService,
-                       PromotionService promotionService) {
+                       PromotionService promotionService,
+                       ShippingAddressService shippingAddressService) {
         this.cartRepository = cartRepository;
         this.cartItemRepository = cartItemRepository;
         this.productService = productService;
@@ -52,6 +54,7 @@ public class CartService {
         this.orderService = orderService;
         this.orderTimelineService = orderTimelineService;
         this.promotionService = promotionService;
+        this.shippingAddressService = shippingAddressService;
     }
 
     @Transactional(readOnly = true)
@@ -123,7 +126,7 @@ public class CartService {
     }
 
     @Transactional
-    public OrderResponse checkout(AppUser user, String shippingAddress, String promotionCode) {
+    public OrderResponse checkout(AppUser user, String shippingAddress, String promotionCode, Long addressId) {
         Cart cart = cartRepository.findByUserAndCheckedOutFalse(user)
                 .orElseThrow(() -> new IllegalArgumentException("购物车为空"));
         List<CartItem> items = cartItemRepository.findByCart(cart);
@@ -149,9 +152,7 @@ public class CartService {
         order.setTotalAmount(promotionCalculation.payableAmount());
         order.setPromotionCode(promotionCalculation.campaign() == null ? null : promotionCalculation.campaign().getCode());
         order.setPromotionTitle(promotionCalculation.campaign() == null ? null : promotionCalculation.campaign().getTitle());
-        order.setShippingAddress((shippingAddress == null || shippingAddress.isBlank())
-                ? (user.getShippingAddress() == null ? "待补充收货地址" : user.getShippingAddress())
-                : shippingAddress);
+        order.setShippingAddress(shippingAddressService.resolveCheckoutAddress(user, addressId, shippingAddress));
         order.setRiskNote(promotionCalculation.discountAmount().compareTo(BigDecimal.ZERO) > 0
                 ? "客户端购物车结算创建，已使用优惠后等待支付"
                 : "客户端购物车结算创建，等待支付");
