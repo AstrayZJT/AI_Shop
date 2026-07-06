@@ -3,6 +3,7 @@ package com.aishop.domain;
 public enum OrderStatus {
     DRAFT,
     PENDING_CONFIRMATION,
+    PENDING_PAYMENT,
     CONFIRMED,
     PROCESSING,
     SHIPPED,

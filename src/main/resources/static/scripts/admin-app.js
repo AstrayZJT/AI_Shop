@@ -15,6 +15,7 @@ const adminState = {
   editingProductId: null,
   orderFilterStatus: "ALL",
   orderFilterKeyword: "",
+  afterSalesFilter: "OPEN",
   assistantOpsFilter: "ALL",
 };
 
@@ -46,6 +47,15 @@ const ORDER_FILTERS = [
   { key: "COMPLETED", label: "已完成" },
   { key: "REFUNDED", label: "已退款" },
   { key: "CANCELLED", label: "已取消" },
+];
+
+const AFTER_SALES_FILTERS = [
+  { key: "OPEN", label: "处理中" },
+  { key: "REQUESTED", label: "待审核" },
+  { key: "AWAITING_CUSTOMER_RETURN", label: "待用户回寄" },
+  { key: "RETURN_SHIPPED", label: "待平台验收" },
+  { key: "REFUNDED", label: "已完成" },
+  { key: "REJECTED", label: "已驳回" },
 ];
 
 const ASSISTANT_SERVICE_STATUS_LABELS = {
@@ -396,6 +406,50 @@ function shipmentQueueOrders() {
   return adminState.orders.filter(isPendingShipment);
 }
 
+function normalizedAfterSalesStatus(order) {
+  if (order?.afterSales?.status) {
+    return order.afterSales.status;
+  }
+  if (order?.status === "REFUND_REQUESTED") {
+    return "REQUESTED";
+  }
+  if (order?.status === "REFUNDED") {
+    return "REFUNDED";
+  }
+  return "";
+}
+
+function afterSalesOrders() {
+  return adminState.orders.filter((order) => Boolean(normalizedAfterSalesStatus(order)));
+}
+
+function isOpenAfterSalesStatus(status) {
+  return ["REQUESTED", "AWAITING_CUSTOMER_RETURN", "RETURN_SHIPPED"].includes(status);
+}
+
+function afterSalesFilterCount(filterKey) {
+  const orders = afterSalesOrders();
+  if (filterKey === "OPEN") {
+    return orders.filter((order) => isOpenAfterSalesStatus(normalizedAfterSalesStatus(order))).length;
+  }
+  return orders.filter((order) => normalizedAfterSalesStatus(order) === filterKey).length;
+}
+
+function matchesAfterSalesFilter(order) {
+  const status = normalizedAfterSalesStatus(order);
+  if (!status) {
+    return false;
+  }
+  if (adminState.afterSalesFilter === "OPEN") {
+    return isOpenAfterSalesStatus(status);
+  }
+  return status === adminState.afterSalesFilter;
+}
+
+function filteredAfterSalesOrders() {
+  return afterSalesOrders().filter(matchesAfterSalesFilter);
+}
+
 function lowStockProducts() {
   return [...adminState.products]
     .filter((product) => Number(product.stock || 0) <= 5)
@@ -459,6 +513,71 @@ function matchesOrderFilter(order) {
 
 function filteredOrders() {
   return adminState.orders.filter(matchesOrderFilter);
+}
+
+function afterSalesStageCardClass(status) {
+  if (status === "REQUESTED" || status === "RETURN_SHIPPED") {
+    return "warning";
+  }
+  if (status === "REFUNDED") {
+    return "success";
+  }
+  if (status === "REJECTED") {
+    return "danger";
+  }
+  return "";
+}
+
+function afterSalesCurrentStageTime(order) {
+  const afterSales = order?.afterSales || {};
+  const status = normalizedAfterSalesStatus(order);
+  if (status === "RETURN_SHIPPED") {
+    return afterSales.customerShippedAt || afterSales.adminRespondedAt || afterSales.requestedAt;
+  }
+  if (status === "AWAITING_CUSTOMER_RETURN") {
+    return afterSales.adminRespondedAt || afterSales.requestedAt;
+  }
+  if (status === "REFUNDED" || status === "REJECTED") {
+    return afterSales.resolvedAt || afterSales.requestedAt;
+  }
+  return afterSales.requestedAt;
+}
+
+function afterSalesStageElapsedLabel(order) {
+  const baseTime = afterSalesCurrentStageTime(order);
+  return baseTime ? `当前阶段已持续 ${formatElapsedLabel(baseTime)}` : "当前阶段时间未知";
+}
+
+function afterSalesStageNote(order) {
+  const afterSales = order?.afterSales || {};
+  const status = normalizedAfterSalesStatus(order);
+  switch (status) {
+    case "REQUESTED":
+      return "等待平台审核，确认是直接退款还是先退货回寄。";
+    case "AWAITING_CUSTOMER_RETURN":
+      return "平台已发出退货指引，等待用户回寄并提交物流单号。";
+    case "RETURN_SHIPPED":
+      return "用户已经提交回寄物流，平台确认收货后即可完成退款。";
+    case "REFUNDED":
+      return `售后已完成，${afterSales.resolvedAt ? `完成时间 ${formatDateTime(afterSales.resolvedAt)}。` : "退款已完成。"}`;
+    case "REJECTED":
+      return `售后已驳回，${afterSales.adminReply ? `处理说明：${afterSales.adminReply}` : "管理员未补充额外说明。"}`;
+    default:
+      return "售后处理中。";
+  }
+}
+
+function afterSalesStageNoteClass(status) {
+  if (status === "REQUESTED" || status === "RETURN_SHIPPED") {
+    return "warning";
+  }
+  if (status === "REFUNDED") {
+    return "success";
+  }
+  if (status === "REJECTED") {
+    return "danger";
+  }
+  return "info";
 }
 
 function renderDashboard() {
@@ -658,6 +777,159 @@ function renderOperationsWorkbench() {
   renderRefundQueue();
   renderShipmentQueue();
   renderLowStockList();
+}
+
+function renderAfterSalesWorkbench() {
+  renderAfterSalesSummary();
+  renderAfterSalesFilterTabs();
+  renderAfterSalesCases();
+}
+
+function renderAfterSalesSummary() {
+  const host = adminById("afterSalesSummary");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看售后工作台。</div>`;
+    return;
+  }
+
+  const openCount = afterSalesFilterCount("OPEN");
+  const requestedCount = afterSalesFilterCount("REQUESTED");
+  const awaitingCount = afterSalesFilterCount("AWAITING_CUSTOMER_RETURN");
+  const shippedCount = afterSalesFilterCount("RETURN_SHIPPED");
+  const resolvedCount = afterSalesFilterCount("REFUNDED");
+  const rejectedCount = afterSalesFilterCount("REJECTED");
+
+  host.innerHTML = [
+    { label: "处理中", value: openCount, tone: "" },
+    { label: "待审核", value: requestedCount, tone: "warning" },
+    { label: "待用户回寄", value: awaitingCount, tone: "" },
+    { label: "待平台验收", value: shippedCount, tone: "warning" },
+    { label: "已完成", value: resolvedCount, tone: "success" },
+    { label: "已驳回", value: rejectedCount, tone: "danger" },
+  ].map((item) => `
+    <div class="assistant-summary-item ${item.tone}">
+      <span class="assistant-summary-label">${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value)}</strong>
+    </div>
+  `).join("");
+}
+
+function renderAfterSalesFilterTabs() {
+  const host = adminById("afterSalesFilterTabs");
+  const summary = adminById("afterSalesFilterSummary");
+  if (!host || !summary) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = "";
+    summary.textContent = "登录后可按售后阶段筛选工单。";
+    return;
+  }
+
+  host.innerHTML = AFTER_SALES_FILTERS.map((filter) => `
+    <button type="button" class="${adminState.afterSalesFilter === filter.key ? "active" : ""}" data-after-sales-filter-key="${filter.key}">
+      ${escapeHtml(filter.label)} · ${afterSalesFilterCount(filter.key)}
+    </button>
+  `).join("");
+
+  host.querySelectorAll("[data-after-sales-filter-key]").forEach((button) => {
+    button.addEventListener("click", () => {
+      adminState.afterSalesFilter = button.dataset.afterSalesFilterKey || "OPEN";
+      renderAfterSalesWorkbench();
+    });
+  });
+
+  const currentFilter = AFTER_SALES_FILTERS.find((item) => item.key === adminState.afterSalesFilter)?.label || "处理中";
+  summary.textContent = `当前展示 ${currentFilter} 工单，共 ${filteredAfterSalesOrders().length} 条。`;
+}
+
+function renderAfterSalesCases() {
+  const host = adminById("afterSalesCasesList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">管理端登录后可集中处理售后工单。</div>`;
+    return;
+  }
+
+  const orders = filteredAfterSalesOrders();
+  if (!orders.length) {
+    host.innerHTML = `<div class="empty-state">当前筛选条件下没有售后工单，可以切换阶段查看其他售后记录。</div>`;
+    return;
+  }
+
+  host.innerHTML = orders.map((order) => renderAfterSalesCase(order)).join("");
+  bindAdminOrderActionButtons(host);
+  host.querySelectorAll(".focus-after-sales-order-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      focusOrder(button.dataset.orderNo || "", button.dataset.orderFilter || "ALL");
+      adminById("orderManagement")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+}
+
+function renderAfterSalesCase(order) {
+  const afterSales = order.afterSales || {};
+  const status = normalizedAfterSalesStatus(order);
+  const userLabel = order.displayName && order.displayName !== order.username
+    ? `${order.displayName} / ${order.username}`
+    : order.username;
+  const requestedAt = afterSales.requestedAt || order.createdAt;
+  return `
+    <article class="after-sales-case-card">
+      <div class="row-top">
+        <div>
+          <strong>${escapeHtml(order.orderNo)}</strong>
+          <div class="inline-meta">${escapeHtml(userLabel || "匿名用户")} · 金额 ${money(order.totalAmount)} · 发起时间 ${escapeHtml(formatDateTime(requestedAt))}</div>
+        </div>
+        <div class="tag ${afterSalesStageCardClass(status)}">${escapeHtml(afterSalesStatusLabel(status))}</div>
+      </div>
+      <div class="after-sales-stage-row">
+        <div class="tag ${afterSalesStageCardClass(status)}">${escapeHtml(afterSalesStageElapsedLabel(order))}</div>
+        <div class="tag">${afterSales.returnRequired ? "需退货回寄" : "可直接退款"}</div>
+        <div class="tag">${escapeHtml(statusLabel(order.status))}</div>
+      </div>
+      <div class="after-sales-stage-note ${afterSalesStageNoteClass(status)}">${escapeHtml(afterSalesStageNote(order))}</div>
+      <div class="after-sales-case-meta">
+        ${afterSales.customerReason ? `<div class="panel-hint">用户原因：${escapeHtml(afterSales.customerReason)}</div>` : ""}
+        ${afterSales.adminReply ? `<div class="panel-hint">平台说明：${escapeHtml(afterSales.adminReply)}</div>` : ""}
+        ${afterSales.returnAddress ? `<div class="panel-hint">回寄地址：${escapeHtml(afterSales.returnAddress)}</div>` : ""}
+        ${afterSales.returnTrackingNo ? `<div class="panel-hint">回寄物流：${escapeHtml(afterSales.returnCarrier || "未填写")} · ${escapeHtml(afterSales.returnTrackingNo)}</div>` : ""}
+        ${afterSales.returnNote ? `<div class="panel-hint">用户补充：${escapeHtml(afterSales.returnNote)}</div>` : ""}
+      </div>
+      <div class="order-items">
+        ${(order.items || []).map((item) => `
+          <div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity} · ${money(item.lineTotal)}</div>
+        `).join("")}
+      </div>
+      ${renderAdminOrderTimeline(order, 4)}
+      ${renderAfterSalesCaseActions(order)}
+      <div class="order-actions">
+        <button type="button" class="ghost focus-after-sales-order-btn" data-order-no="${escapeHtml(order.orderNo)}" data-order-filter="${escapeHtml(order.status === "REFUND_REQUESTED" ? "REFUND_REQUESTED" : order.status)}">查看订单全量视图</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderAfterSalesCaseActions(order) {
+  const status = normalizedAfterSalesStatus(order);
+  if (order.status === "REFUND_REQUESTED") {
+    return `
+      ${renderAdminAfterSalesControls(order, "售后处理备注，例如审核意见、退货验收说明")}
+      ${renderAdminLogisticsUpdateBlock(order)}
+    `;
+  }
+  if (status === "REFUNDED") {
+    return `<div class="panel-hint">售后已完成，订单已经进入已退款状态，时间线里保留了完整处理轨迹。</div>`;
+  }
+  if (status === "REJECTED") {
+    return `<div class="panel-hint">售后已驳回，订单继续保留在已完成状态；需要时可以回到订单全量视图查看订单履约上下文。</div>`;
+  }
+  return `<div class="panel-hint">当前售后工单已进入下一阶段，可结合下方时间线和订单视图继续跟进。</div>`;
 }
 
 function renderAssistantOperations() {
@@ -1034,6 +1306,27 @@ function renderOrderFilterTabs() {
   summary.textContent = `当前筛选：${filterLabel}${keyword}，共命中 ${resultCount} 条订单。`;
 }
 
+function bindAdminOrderActionButtons(host) {
+  host.querySelectorAll(".save-order-status-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => updateOrderStatus(Number(button.dataset.orderId))));
+  });
+  host.querySelectorAll(".refund-review-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => reviewRefund(
+      Number(button.dataset.orderId),
+      button.dataset.approved === "true",
+    )));
+  });
+  host.querySelectorAll(".issue-return-instructions-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => provideReturnInstructions(Number(button.dataset.orderId))));
+  });
+  host.querySelectorAll(".confirm-return-refund-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => confirmReturnAndRefund(Number(button.dataset.orderId))));
+  });
+  host.querySelectorAll(".save-logistics-update-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => appendLogisticsUpdate(Number(button.dataset.orderId))));
+  });
+}
+
 function renderOrders() {
   const host = adminById("adminOrdersList");
   if (!host) {
@@ -1251,14 +1544,15 @@ function latestLogisticsEvent(order) {
   return null;
 }
 
-function renderAdminOrderTimeline(order) {
+function renderAdminOrderTimeline(order, maxItems = 0) {
   const timeline = order.timeline || [];
   if (!timeline.length) {
     return `<div class="timeline-empty">当前订单还没有可展示的流转轨迹。</div>`;
   }
+  const visibleTimeline = maxItems > 0 ? timeline.slice(-maxItems) : timeline;
   return `
     <div class="timeline-list compact">
-      ${timeline.map((event) => `
+      ${visibleTimeline.map((event) => `
         <div class="timeline-item">
           <div class="timeline-marker"></div>
           <div class="timeline-content">
@@ -1414,6 +1708,7 @@ function clearAdminDataState() {
   adminState.assistantDrafts = [];
   adminState.selectedAssistantSessionId = null;
   adminState.editingProductId = null;
+  adminState.afterSalesFilter = "OPEN";
   adminState.assistantOpsFilter = "ALL";
 }
 
@@ -1422,6 +1717,7 @@ async function loadAdminData() {
     clearAdminDataState();
     renderDashboard();
     renderOperationsWorkbench();
+    renderAfterSalesWorkbench();
     renderProducts();
     renderOrderFilterTabs();
     renderOrders();
@@ -1465,6 +1761,7 @@ async function loadAdminData() {
 
   renderDashboard();
   renderOperationsWorkbench();
+  renderAfterSalesWorkbench();
   renderProducts();
   renderOrderFilterTabs();
   renderOrders();
@@ -1823,6 +2120,7 @@ document.addEventListener("DOMContentLoaded", () => {
     adminById("adminPassword").value = "admin123";
   });
   adminById("refreshDashboardBtn").addEventListener("click", () => runAdminAction(loadAdminData));
+  adminById("refreshAfterSalesBtn").addEventListener("click", () => runAdminAction(loadAdminData));
   adminById("refreshAssistantOpsBtn").addEventListener("click", () => runAdminAction(loadAdminData));
   adminById("adminAssistantClaimBtn").addEventListener("click", () => runAdminAction(() => claimAssistantSession()));
   adminById("adminAssistantAssignSelect").addEventListener("change", () => syncAssistantAssignControls());

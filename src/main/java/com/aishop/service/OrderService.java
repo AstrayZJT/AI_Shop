@@ -384,6 +384,7 @@ public class OrderService {
         return switch (status) {
             case DRAFT -> "草稿";
             case PENDING_CONFIRMATION -> "待确认";
+            case PENDING_PAYMENT -> "待支付";
             case CONFIRMED -> "待发货";
             case PROCESSING -> "处理中";
             case SHIPPED -> "已发货";

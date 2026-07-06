@@ -51,7 +51,18 @@
               <h2>商品目录</h2>
               <p id="productMeta">正在加载商品</p>
             </div>
+            <div class="catalog-toolbar">
+              <div id="recommendationScenes" class="segmented"></div>
+              <select id="productSortSelect" class="catalog-sort-select">
+                <option value="recommended">智能推荐</option>
+                <option value="price-asc">价格从低到高</option>
+                <option value="price-desc">价格从高到低</option>
+                <option value="stock-desc">库存优先</option>
+                <option value="name">名称排序</option>
+              </select>
+            </div>
           </div>
+          <div id="recommendationPanel" class="recommendation-panel"></div>
           <div id="productGrid" class="product-grid"></div>
         </div>
 

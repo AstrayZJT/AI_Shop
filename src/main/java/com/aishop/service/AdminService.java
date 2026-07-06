@@ -529,9 +529,13 @@ public class AdminService {
         }
         boolean allowed = switch (currentStatus) {
             case DRAFT -> nextStatus == OrderStatus.PENDING_CONFIRMATION
+                    || nextStatus == OrderStatus.PENDING_PAYMENT
                     || nextStatus == OrderStatus.CONFIRMED
                     || nextStatus == OrderStatus.CANCELLED;
-            case PENDING_CONFIRMATION -> nextStatus == OrderStatus.CONFIRMED
+            case PENDING_CONFIRMATION -> nextStatus == OrderStatus.PENDING_PAYMENT
+                    || nextStatus == OrderStatus.CONFIRMED
+                    || nextStatus == OrderStatus.CANCELLED;
+            case PENDING_PAYMENT -> nextStatus == OrderStatus.CONFIRMED
                     || nextStatus == OrderStatus.CANCELLED;
             case CONFIRMED -> nextStatus == OrderStatus.PROCESSING
                     || nextStatus == OrderStatus.SHIPPED
@@ -613,6 +617,7 @@ public class AdminService {
             case CANCELLED -> "订单已取消";
             case CONFIRMED -> "订单回到待发货";
             case PENDING_CONFIRMATION -> "订单等待确认";
+            case PENDING_PAYMENT -> "订单等待支付";
             case DRAFT -> "订单保存为草稿";
             case REFUND_REQUESTED -> "订单进入退款审核";
             case REFUNDED -> "订单已退款";
@@ -645,6 +650,7 @@ public class AdminService {
         return switch (status) {
             case DRAFT -> "草稿";
             case PENDING_CONFIRMATION -> "待确认";
+            case PENDING_PAYMENT -> "待支付";
             case CONFIRMED -> "待发货";
             case PROCESSING -> "处理中";
             case SHIPPED -> "已发货";

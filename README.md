@@ -4,8 +4,8 @@
 
 当前项目已经不是最早的“聊天演示页”了，而是一个继续在同一仓库内扩展出来的完整业务雏形：
 
-- 客户端：注册、登录、商品浏览、购物车、下单、订单查询、地址维护、AI 客服
-- 管理端：商品管理、订单履约、退款审核、知识库导入、用户查看、AI 会话接管
+- 客户端：注册、登录、商品浏览、场景化选品推荐、购物车、下单、订单查询、地址维护、AI 客服
+- 管理端：商品管理、订单履约、售后工作台、退款审核、知识库导入、用户查看、AI 会话接管
 - AI 客服：商品推荐、订单查询、订单动作代办、RAG 检索、人工转接、后台人工回复回流
 
 ## 1. 当前架构
@@ -280,7 +280,9 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - 用户注册、登录、退出
 - 个人资料维护
-- 商品列表、分类、搜索、详情浏览
+- 商品列表、分类、搜索、详情浏览、排序
+- 商品场景化推荐、推荐理由、选品决策区
+- 从商品卡片快速发起 AI 咨询、同类对比、下单草稿
 - 购物车增删改
 - 结算下单
 - 订单列表
@@ -304,6 +306,8 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 退款审核
 - 发送退货指引
 - 确认收到退货并退款
+- 售后工作台（待审核、待回寄、待验收、已完成、已驳回）
+- 售后工单按阶段统计、筛选、查看逆向物流和订单时间线
 - 用户列表
 - 知识库文档导入与检索
 - AI 会话列表
@@ -320,6 +324,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 当前 AI 客服已经能处理这些常见场景：
 
 - 商品推荐
+- 商品详情咨询、同类对比和下单草稿快捷引导
 - 查询最近订单
 - 查询具体订单状态、物流、地址、最新履约进度
 - 读取最新物流节点并结合订单状态解释下一步
@@ -532,7 +537,23 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - 直接同浏览器双开客户端和管理端
 - 或者一个普通窗口、一个无痕窗口做多账号测试
 
-### 12.2 8080 端口占用
+### 12.2 客户端商品推荐怎么理解
+
+客户端商品目录里的“为你推荐 / 通勤轻便 / 专注办公 / 手机拍照 / 影音娱乐”是前端本地选品体验，不是每次都调用大模型。
+
+它主要根据这些信息做本地打分：
+
+- 当前搜索关键词
+- 当前分类
+- 用户偏好摘要
+- 商品名称、描述、分类、价格、库存
+- 当前选择的推荐场景
+
+点击商品区里的“问 AI 适不适合我”“让 AI 比较同类商品”“生成下单草稿”时，才会把问题写入 AI 客服输入框并调用 `/api/assistant/chat`。
+
+另外，客户端加载商品时会优先要求 `/api/products` 成功；如果 `/api/categories` 临时失败，页面会自动降级成无分类浏览，并显示提示。
+
+### 12.3 8080 端口占用
 
 如果启动时报 `Port 8080 was already in use`，可以：
 
@@ -568,6 +589,9 @@ mvn -q -DskipTests compile
 - 向量索引同步：`src/main/java/com/aishop/service/KnowledgeIndexSynchronizer.java`
 - pgvector 存储：`src/main/java/com/aishop/service/PgVectorEmbeddingStoreFacade.java`
 - 自动补旧表结构：`src/main/java/com/aishop/config/LegacyPostgresSchemaMigrator.java`
+- 客户端前端逻辑：`src/main/resources/static/scripts/client-app.js`
+- 管理端前端逻辑：`src/main/resources/static/scripts/admin-app.js`
+- 前后台共享样式：`src/main/resources/static/styles/portal.css`
 
 ---
 

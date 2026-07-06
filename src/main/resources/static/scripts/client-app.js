@@ -10,6 +10,10 @@ const clientState = {
   threadId: null,
   pendingDraft: null,
   assistantContext: null,
+  productSort: "recommended",
+  recommendationScene: "AUTO",
+  selectedProductId: null,
+  selectedProduct: null,
 };
 
 const ORDER_STATUS_LABELS = {
@@ -37,6 +41,14 @@ const ASSISTANT_SERVICE_STATUS_LABELS = {
   ESCALATED: "人工跟进中",
   RESOLVED: "人工已回复",
 };
+
+const RECOMMENDATION_SCENES = [
+  { key: "AUTO", label: "为你推荐", keywords: [] },
+  { key: "COMMUTE", label: "通勤轻便", keywords: ["通勤", "便携", "轻便", "续航", "降噪", "耳机"] },
+  { key: "FOCUS", label: "专注办公", keywords: ["办公", "会议", "降噪", "轻办公", "平板", "键盘"] },
+  { key: "MOBILE", label: "手机拍照", keywords: ["手机", "拍照", "影像", "旗舰", "续航"] },
+  { key: "ENTERTAINMENT", label: "影音娱乐", keywords: ["娱乐", "游戏", "音箱", "耳机", "沉浸", "屏幕"] },
+];
 const CLIENT_AUTH_SCOPE = "customer";
 
 function clientById(id) {
@@ -149,6 +161,156 @@ function currency(value) {
   }).format(value || 0);
 }
 
+function normalizeText(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function sceneDefinition(sceneKey = clientState.recommendationScene) {
+  return RECOMMENDATION_SCENES.find((scene) => scene.key === sceneKey) || RECOMMENDATION_SCENES[0];
+}
+
+function effectiveScene() {
+  if (clientState.recommendationScene !== "AUTO") {
+    return sceneDefinition(clientState.recommendationScene);
+  }
+  const userText = normalizeText(clientState.user?.preferencesSummary);
+  const searchText = normalizeText(clientById("searchInput")?.value);
+  const categoryText = normalizeText(clientState.category === "全部" ? "" : clientState.category);
+  const combined = `${userText} ${searchText} ${categoryText}`;
+  if (combined.includes("拍照") || combined.includes("手机") || combined.includes("影像")) {
+    return sceneDefinition("MOBILE");
+  }
+  if (combined.includes("游戏") || combined.includes("音箱") || combined.includes("娱乐")) {
+    return sceneDefinition("ENTERTAINMENT");
+  }
+  if (combined.includes("办公") || combined.includes("会议") || combined.includes("轻办公")) {
+    return sceneDefinition("FOCUS");
+  }
+  if (combined.includes("通勤") || combined.includes("便携") || combined.includes("降噪")) {
+    return sceneDefinition("COMMUTE");
+  }
+  return sceneDefinition("COMMUTE");
+}
+
+function recommendationTokens() {
+  const keyword = normalizeText(clientById("searchInput")?.value);
+  const scene = effectiveScene();
+  const preferences = normalizeText(clientState.user?.preferencesSummary);
+  return Array.from(new Set(
+    [keyword, preferences, normalizeText(clientState.category === "全部" ? "" : clientState.category), ...scene.keywords]
+      .join(" ")
+      .split(/\s+/)
+      .filter((token) => token && token.length >= 2),
+  ));
+}
+
+function productSearchPool(product) {
+  return normalizeText([product.name, product.description, product.category, product.sku].join(" "));
+}
+
+function productRecommendationScore(product) {
+  const pool = productSearchPool(product);
+  const tokens = recommendationTokens();
+  const scene = effectiveScene();
+  let score = 0;
+  if (clientState.category !== "全部" && product.category === clientState.category) {
+    score += 40;
+  }
+  if (clientState.selectedProductId === product.id) {
+    score += 18;
+  }
+  if (scene.keywords.length && scene.keywords.some((keyword) => pool.includes(normalizeText(keyword)))) {
+    score += 55;
+  }
+  tokens.forEach((token) => {
+    if (pool.includes(token)) {
+      score += token.length >= 4 ? 32 : 16;
+    }
+  });
+  if (clientState.user?.preferencesSummary && product.category && normalizeText(clientState.user.preferencesSummary).includes(normalizeText(product.category))) {
+    score += 22;
+  }
+  score += Math.min(Number(product.stock || 0), 20);
+  score += Math.max(0, 18 - Math.floor(Number(product.price || 0) / 500));
+  return score;
+}
+
+function sortProducts(products) {
+  const sorted = [...products];
+  switch (clientState.productSort) {
+    case "price-asc":
+      return sorted.sort((left, right) => Number(left.price || 0) - Number(right.price || 0));
+    case "price-desc":
+      return sorted.sort((left, right) => Number(right.price || 0) - Number(left.price || 0));
+    case "stock-desc":
+      return sorted.sort((left, right) => Number(right.stock || 0) - Number(left.stock || 0));
+    case "name":
+      return sorted.sort((left, right) => String(left.name || "").localeCompare(String(right.name || ""), "zh-CN"));
+    case "recommended":
+    default:
+      return sorted.sort((left, right) => productRecommendationScore(right) - productRecommendationScore(left));
+  }
+}
+
+function recommendationReasonTags(product) {
+  const tags = [];
+  const scene = effectiveScene();
+  const pool = productSearchPool(product);
+  if (scene.keywords.some((keyword) => pool.includes(normalizeText(keyword)))) {
+    tags.push(scene.label);
+  }
+  if (clientState.user?.preferencesSummary) {
+    const preferences = normalizeText(clientState.user.preferencesSummary);
+    if (preferences.includes("性价比") && Number(product.price || 0) <= 2000) {
+      tags.push("性价比友好");
+    }
+    if (preferences.includes("降噪") && pool.includes("降噪")) {
+      tags.push("降噪匹配");
+    }
+    if (preferences.includes("轻办公") && (pool.includes("办公") || pool.includes("平板"))) {
+      tags.push("轻办公匹配");
+    }
+  }
+  if (Number(product.stock || 0) <= 5) {
+    tags.push("库存紧张");
+  } else if (Number(product.stock || 0) >= 15) {
+    tags.push("现货充足");
+  }
+  if (Number(product.price || 0) >= 3000) {
+    tags.push("高阶配置");
+  } else if (Number(product.price || 0) <= 1500) {
+    tags.push("入门友好");
+  }
+  return Array.from(new Set(tags)).slice(0, 3);
+}
+
+function recommendationNarrative(product) {
+  const tags = recommendationReasonTags(product);
+  if (tags.length) {
+    return `这件商品更贴近当前的选品场景，重点理由：${tags.join("、")}。`;
+  }
+  return "这件商品在当前目录里综合匹配度更高，适合作为优先了解对象。";
+}
+
+function recommendedProducts(limit = 4) {
+  return sortProducts(filteredProducts()).slice(0, limit);
+}
+
+function selectedCatalogProduct() {
+  return clientState.selectedProduct || clientState.products.find((product) => product.id === clientState.selectedProductId) || null;
+}
+
+function ensureSelectedProduct(products = filteredProducts()) {
+  const selected = selectedCatalogProduct();
+  if (selected && products.some((product) => product.id === selected.id)) {
+    return selected;
+  }
+  const fallback = recommendedProducts(1)[0] || products[0] || null;
+  clientState.selectedProductId = fallback?.id || null;
+  clientState.selectedProduct = fallback;
+  return fallback;
+}
+
 function renderCategories() {
   const host = clientById("categoryTabs");
   if (!host) {
@@ -163,7 +325,26 @@ function renderCategories() {
   host.querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", () => {
       clientState.category = button.dataset.category;
-      renderProducts();
+      renderCatalogExperience();
+    });
+  });
+}
+
+function renderRecommendationScenes() {
+  const host = clientById("recommendationScenes");
+  if (!host) {
+    return;
+  }
+  host.innerHTML = RECOMMENDATION_SCENES.map((scene) => `
+    <button type="button" class="${clientState.recommendationScene === scene.key ? "active" : ""}" data-scene-key="${scene.key}">
+      ${escapeHtml(scene.label)}
+    </button>
+  `).join("");
+  host.querySelectorAll("[data-scene-key]").forEach((button) => {
+    button.addEventListener("click", () => {
+      clientState.recommendationScene = button.dataset.sceneKey || "AUTO";
+      clientState.selectedProduct = null;
+      renderCatalogExperience();
     });
   });
 }
@@ -178,18 +359,102 @@ function filteredProducts() {
   });
 }
 
+function renderRecommendationPanel() {
+  const host = clientById("recommendationPanel");
+  if (!host) {
+    return;
+  }
+  const recommended = recommendedProducts(4);
+  const selected = ensureSelectedProduct(filteredProducts());
+  const scene = effectiveScene();
+  if (!recommended.length || !selected) {
+    host.innerHTML = `<div class="empty-state">当前条件下还没有可推荐的商品，试试切换分类、场景或关键词。</div>`;
+    return;
+  }
+  host.innerHTML = `
+    <section class="recommendation-hero">
+      <img src="${selected.imageUrl || "/favicon.svg"}" alt="${escapeHtml(selected.name)}">
+      <div class="recommendation-copy">
+        <span class="eyebrow">Smart Picks</span>
+        <h3>${escapeHtml(selected.name)}</h3>
+        <div class="product-meta">${escapeHtml(selected.description || "暂无更多描述")}</div>
+        <div class="recommendation-stats">
+          <div class="tag">${escapeHtml(scene.label)}</div>
+          <div class="tag">${escapeHtml(selected.category || "未分类")}</div>
+          <div class="tag">${currency(selected.price)}</div>
+          <div class="tag">${escapeHtml(Number(selected.stock || 0) > 0 ? `库存 ${selected.stock}` : "暂时缺货")}</div>
+        </div>
+        <div class="panel-hint">${escapeHtml(recommendationNarrative(selected))}</div>
+        <div class="recommendation-tags">
+          ${recommendationReasonTags(selected).map((tag) => `<span class="tag warning">${escapeHtml(tag)}</span>`).join("")}
+        </div>
+        <div class="order-actions">
+          <button type="button" class="primary product-add-cart-btn" data-product-id="${selected.id}">加入购物车</button>
+          <button type="button" class="ghost product-detail-btn" data-product-id="${selected.id}">查看详情</button>
+          <button type="button" class="ghost product-ai-btn" data-product-id="${selected.id}" data-mode="guide">问 AI 适不适合我</button>
+        </div>
+      </div>
+    </section>
+    <section class="recommendation-detail">
+      <div class="row-top">
+        <div>
+          <h3>选品决策区</h3>
+          <p class="panel-hint">把推荐理由、购买提示和 AI 快捷提问集中到一起，减少在列表里来回比较。</p>
+        </div>
+      </div>
+      <div class="recommendation-detail-grid">
+        <div class="recommendation-detail-item">
+          <strong>为什么推荐</strong>
+          <div class="panel-hint">${escapeHtml(recommendationNarrative(selected))}</div>
+        </div>
+        <div class="recommendation-detail-item">
+          <strong>当前人群</strong>
+          <div class="panel-hint">${escapeHtml(productAudienceText(selected))}</div>
+        </div>
+        <div class="recommendation-detail-item">
+          <strong>购买提示</strong>
+          <div class="panel-hint">${escapeHtml(productPurchaseHint(selected))}</div>
+        </div>
+      </div>
+      <div class="order-actions">
+        <button type="button" class="ghost product-ai-btn" data-product-id="${selected.id}" data-mode="compare">让 AI 比较同类商品</button>
+        <button type="button" class="ghost product-ai-btn" data-product-id="${selected.id}" data-mode="draft">生成下单草稿</button>
+      </div>
+      <div class="recommendation-mini-grid">
+        ${recommended.map((product) => `
+          <article class="recommendation-mini">
+            <img src="${product.imageUrl || "/favicon.svg"}" alt="${escapeHtml(product.name)}">
+            <div class="tag">${escapeHtml(product.category || "未分类")}</div>
+            <h4>${escapeHtml(product.name)}</h4>
+            <div class="inline-meta">${currency(product.price)} · 库存 ${escapeHtml(product.stock)}</div>
+            <div class="panel-hint">${escapeHtml(recommendationNarrative(product))}</div>
+            <div class="product-actions-compact">
+              <button type="button" class="ghost product-select-btn" data-product-id="${product.id}">查看</button>
+              <button type="button" class="primary product-add-cart-btn" data-product-id="${product.id}">加入购物车</button>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+  bindCatalogActionButtons(host);
+}
+
 function renderProducts() {
-  const products = filteredProducts();
+  const products = sortProducts(filteredProducts());
   const host = clientById("productGrid");
   const meta = clientById("productMeta");
   if (!host || !meta) {
     return;
   }
-  meta.textContent = `共 ${products.length} 件商品，当前分类：${clientState.category}`;
+  const scene = effectiveScene();
+  const sortLabel = clientById("productSortSelect")?.selectedOptions?.[0]?.textContent?.trim() || "智能推荐";
+  meta.textContent = `共 ${products.length} 件商品 · 当前分类 ${clientState.category} · 场景 ${scene.label} · 排序 ${sortLabel}`;
   if (products.length === 0) {
     host.innerHTML = `<div class="empty-state">没有找到符合条件的商品，试试切换分类或更换关键词。</div>`;
     return;
   }
+  ensureSelectedProduct(products);
   host.innerHTML = products.map((product) => `
     <article class="product-card">
       <img src="${product.imageUrl || "/favicon.svg"}" alt="${escapeHtml(product.name)}">
@@ -197,19 +462,110 @@ function renderProducts() {
         <div class="tag">${escapeHtml(product.category || "未分类")}</div>
         <h3>${escapeHtml(product.name)}</h3>
         <div class="product-meta">${escapeHtml(product.description || "暂无描述")}</div>
+        <div class="recommendation-tags">
+          ${recommendationReasonTags(product).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}
+        </div>
         <div class="product-price">
           <span>${currency(product.price)}</span>
           <span class="inline-meta">库存 ${product.stock}</span>
         </div>
-        <button type="button" class="primary add-cart-btn" data-product-id="${product.id}">
-          加入购物车
-        </button>
+        <div class="product-actions-compact">
+          <button type="button" class="primary product-add-cart-btn" data-product-id="${product.id}">
+            加入购物车
+          </button>
+          <button type="button" class="ghost product-detail-btn" data-product-id="${product.id}">
+            查看详情
+          </button>
+        </div>
       </div>
     </article>
   `).join("");
-  host.querySelectorAll(".add-cart-btn").forEach((button) => {
-    button.addEventListener("click", () => addToCart(Number(button.dataset.productId)));
+  bindCatalogActionButtons(host);
+}
+
+function productAudienceText(product) {
+  const pool = productSearchPool(product);
+  if (pool.includes("降噪") || pool.includes("通勤")) {
+    return "更适合需要频繁通勤、会议或希望隔绝环境噪音的人。";
+  }
+  if (pool.includes("拍照") || pool.includes("影像")) {
+    return "更适合在意手机拍照、视频记录和移动内容创作的人。";
+  }
+  if (pool.includes("办公") || pool.includes("平板")) {
+    return "更适合轻办公、课堂记录和移动处理文档的场景。";
+  }
+  if (pool.includes("音箱") || pool.includes("娱乐")) {
+    return "更适合在宿舍、客厅或小型桌面娱乐环境使用。";
+  }
+  return "适合想先从当前场景里快速锁定候选商品的用户。";
+}
+
+function productPurchaseHint(product) {
+  if (Number(product.stock || 0) <= 3) {
+    return "库存已经比较紧，适合先加入购物车或让 AI 帮你生成下单草稿。";
+  }
+  if (Number(product.price || 0) >= 3000) {
+    return "客单价相对更高，建议先让 AI 对比同类产品后再决定。";
+  }
+  if (Number(product.price || 0) <= 1500) {
+    return "预算门槛更友好，适合先作为入门候选。";
+  }
+  return "可以先查看详情和适用场景，再决定直接下单还是交给 AI 帮你比较。";
+}
+
+function buildProductAssistantPrompt(product, mode = "guide") {
+  if (!product) {
+    return "帮我推荐一个当前更适合我的商品。";
+  }
+  if (mode === "compare") {
+    return `请把商品 ${product.name} 和当前目录里同类商品做一个简短对比，重点说适合人群、价格和购买建议。`;
+  }
+  if (mode === "draft") {
+    return `帮我生成一个商品 ${product.name} 的下单草稿，数量 1。`;
+  }
+  return `请详细介绍商品 ${product.name}，并结合它的价格、库存、适合人群告诉我是否值得买。`;
+}
+
+async function openProductDetail(productId) {
+  const cached = clientState.products.find((product) => product.id === productId) || null;
+  try {
+    clientState.selectedProduct = await clientFetchJson(`/api/products/${productId}`);
+  } catch (error) {
+    clientState.selectedProduct = cached;
+  }
+  clientState.selectedProductId = productId;
+  renderCatalogExperience();
+}
+
+async function askAiAboutProduct(productId, mode) {
+  const product = clientState.products.find((item) => item.id === productId) || clientState.selectedProduct;
+  const prompt = buildProductAssistantPrompt(product, mode);
+  clientById("assistantInput").value = prompt;
+  clientById("assistant")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (!clientState.user) {
+    setStoreStatus("已帮你写好商品问题，登录后可直接发送给 AI 客服");
+    return;
+  }
+  await sendAssistantMessage(prompt);
+}
+
+function bindCatalogActionButtons(host) {
+  host.querySelectorAll(".product-add-cart-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => addToCart(Number(button.dataset.productId))));
   });
+  host.querySelectorAll(".product-detail-btn, .product-select-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => openProductDetail(Number(button.dataset.productId))));
+  });
+  host.querySelectorAll(".product-ai-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => askAiAboutProduct(Number(button.dataset.productId), button.dataset.mode)));
+  });
+}
+
+function renderCatalogExperience() {
+  renderCategories();
+  renderRecommendationScenes();
+  renderRecommendationPanel();
+  renderProducts();
 }
 
 function renderCart() {
@@ -674,14 +1030,19 @@ async function loadMe() {
 }
 
 async function loadCatalog() {
-  const [categories, products] = await Promise.all([
+  const [categoriesResult, productsResult] = await Promise.allSettled([
     clientFetchJson("/api/categories"),
     clientFetchJson("/api/products"),
   ]);
-  clientState.categories = categories || [];
-  clientState.products = products || [];
-  renderCategories();
-  renderProducts();
+  if (productsResult.status !== "fulfilled") {
+    throw productsResult.reason;
+  }
+  clientState.categories = categoriesResult.status === "fulfilled" ? (categoriesResult.value || []) : [];
+  clientState.products = productsResult.value || [];
+  renderCatalogExperience();
+  if (categoriesResult.status !== "fulfilled") {
+    setStoreStatus("商品已加载，分类接口暂时不可用，已自动降级为无分类浏览");
+  }
 }
 
 async function loadCart() {
@@ -969,6 +1330,7 @@ async function saveProfile(event) {
   });
   clientState.user = updated;
   renderProfile();
+  renderCatalogExperience();
   clientById("shippingAddress").value = updated.shippingAddress || "";
   setStoreStatus("资料已保存，新的默认地址会用于后续结算");
 }
@@ -1061,11 +1423,18 @@ async function runClientAction(action) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  clientById("searchBtn").addEventListener("click", renderProducts);
+  clientById("searchBtn").addEventListener("click", renderCatalogExperience);
   clientById("searchInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      renderProducts();
+      renderCatalogExperience();
     }
+  });
+  clientById("searchInput").addEventListener("input", () => {
+    renderCatalogExperience();
+  });
+  clientById("productSortSelect").addEventListener("change", (event) => {
+    clientState.productSort = event.target.value || "recommended";
+    renderCatalogExperience();
   });
   clientById("loginBtn").addEventListener("click", () => runClientAction(login));
   clientById("registerBtn").addEventListener("click", () => runClientAction(registerUser));
