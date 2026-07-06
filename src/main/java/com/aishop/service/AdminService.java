@@ -1,16 +1,23 @@
 package com.aishop.service;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.aishop.domain.AppUser;
+import com.aishop.domain.AssistantSession;
 import com.aishop.domain.KnowledgeDocument;
 import com.aishop.domain.OrderStatus;
+import com.aishop.domain.PendingOrderDraft;
 import com.aishop.domain.Product;
 import com.aishop.domain.ShopOrder;
+import com.aishop.dto.AdminDtos.AdminAssistantDraftResponse;
+import com.aishop.dto.AdminDtos.AdminAssistantMessageResponse;
+import com.aishop.dto.AdminDtos.AdminAssistantSessionResponse;
 import com.aishop.dto.AdminDtos.AdminOrderItemResponse;
 import com.aishop.dto.AdminDtos.AdminOrderResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
@@ -20,33 +27,49 @@ import com.aishop.dto.AdminDtos.KnowledgeSearchResponse;
 import com.aishop.dto.AdminDtos.ProductUpsertRequest;
 import com.aishop.dto.ProductDtos.ProductResponse;
 import com.aishop.repository.AppUserRepository;
+import com.aishop.repository.AssistantMessageRepository;
+import com.aishop.repository.AssistantSessionRepository;
 import com.aishop.repository.KnowledgeDocumentRepository;
 import com.aishop.repository.OrderItemRepository;
+import com.aishop.repository.PendingOrderDraftRepository;
 import com.aishop.repository.ProductRepository;
 import com.aishop.repository.ShopOrderRepository;
 
 @Service
 public class AdminService {
 
+    private static final Pattern DRAFT_PATTERN = Pattern.compile(
+            "\\\"productId\\\":(?<productId>\\d+),\\\"productName\\\":\\\"(?<productName>.*?)\\\",\\\"quantity\\\":(?<quantity>\\d+),\\\"unitPrice\\\":(?<unitPrice>[-\\d.]+),\\\"totalAmount\\\":(?<totalAmount>[-\\d.]+),\\\"note\\\":\\\"(?<note>.*?)\\\""
+    );
+
     private final AppUserRepository userRepository;
+    private final AssistantSessionRepository assistantSessionRepository;
+    private final AssistantMessageRepository assistantMessageRepository;
     private final ProductRepository productRepository;
     private final ShopOrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
+    private final PendingOrderDraftRepository pendingOrderDraftRepository;
     private final KnowledgeDocumentRepository knowledgeDocumentRepository;
     private final ProductService productService;
     private final KnowledgeService knowledgeService;
 
     public AdminService(AppUserRepository userRepository,
+                        AssistantSessionRepository assistantSessionRepository,
+                        AssistantMessageRepository assistantMessageRepository,
                         ProductRepository productRepository,
                         ShopOrderRepository orderRepository,
                         OrderItemRepository orderItemRepository,
+                        PendingOrderDraftRepository pendingOrderDraftRepository,
                         KnowledgeDocumentRepository knowledgeDocumentRepository,
                         ProductService productService,
                         KnowledgeService knowledgeService) {
         this.userRepository = userRepository;
+        this.assistantSessionRepository = assistantSessionRepository;
+        this.assistantMessageRepository = assistantMessageRepository;
         this.productRepository = productRepository;
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
+        this.pendingOrderDraftRepository = pendingOrderDraftRepository;
         this.knowledgeDocumentRepository = knowledgeDocumentRepository;
         this.productService = productService;
         this.knowledgeService = knowledgeService;
@@ -100,7 +123,7 @@ public class AdminService {
     }
 
     @Transactional
-    public AdminOrderResponse updateOrderStatus(Long id, String rawStatus, String note) {
+    public AdminOrderResponse updateOrderStatus(Long id, String rawStatus, String note, String shippingCarrier, String trackingNo) {
         ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
         OrderStatus nextStatus = parseStatus(rawStatus);
         if (nextStatus == OrderStatus.REFUNDED || order.getStatus() == OrderStatus.REFUND_REQUESTED) {
@@ -109,6 +132,9 @@ public class AdminService {
         validateStatusTransition(order.getStatus(), nextStatus);
         if (nextStatus == OrderStatus.CANCELLED && order.getStatus() != OrderStatus.CANCELLED) {
             restoreStockForOrder(order);
+        }
+        if (nextStatus == OrderStatus.SHIPPED) {
+            applyShipmentDetails(order, shippingCarrier, trackingNo);
         }
         order.setStatus(nextStatus);
         order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员更新状态为" + nextStatus.name(), note));
@@ -151,6 +177,32 @@ public class AdminService {
     public List<AdminUserResponse> listUsers() {
         return userRepository.findAllByOrderByCreatedAtDesc().stream()
                 .map(this::toAdminUserResponse)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AdminAssistantSessionResponse> listAssistantSessions() {
+        return assistantSessionRepository.findTop20ByOrderByCreatedAtDesc().stream()
+                .map(this::toAdminAssistantSessionResponse)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AdminAssistantMessageResponse> assistantMessages(Long sessionId) {
+        AssistantSession session = assistantSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("AI 会话不存在"));
+        return assistantMessageRepository.findBySessionOrderByCreatedAtAsc(session).stream()
+                .map(message -> new AdminAssistantMessageResponse(
+                        message.getRole(),
+                        message.getContent(),
+                        message.getCreatedAt()))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AdminAssistantDraftResponse> listPendingAssistantDrafts() {
+        return pendingOrderDraftRepository.findTop20ByStatusOrderByCreatedAtDesc("PENDING_CONFIRMATION").stream()
+                .map(this::toAdminAssistantDraftResponse)
                 .toList();
     }
 
@@ -202,6 +254,9 @@ public class AdminService {
                 user.getDisplayName(),
                 order.getTotalAmount(),
                 order.getShippingAddress(),
+                order.getShippingCarrier(),
+                order.getTrackingNo(),
+                order.getShippedAt(),
                 order.getRiskNote(),
                 order.getCreatedAt(),
                 items);
@@ -227,6 +282,39 @@ public class AdminService {
                 user.getPhone(),
                 user.getShippingAddress(),
                 user.getCreatedAt());
+    }
+
+    private AdminAssistantSessionResponse toAdminAssistantSessionResponse(AssistantSession session) {
+        AppUser user = session.getUser();
+        return new AdminAssistantSessionResponse(
+                session.getId(),
+                "assistant-" + session.getId(),
+                session.getTitle(),
+                session.getSummary(),
+                session.getLastIntent(),
+                session.getServiceStatus(),
+                user.getUsername(),
+                user.getDisplayName(),
+                assistantMessageRepository.countBySession(session),
+                session.getCreatedAt());
+    }
+
+    private AdminAssistantDraftResponse toAdminAssistantDraftResponse(PendingOrderDraft draft) {
+        DraftPayload payload = parseDraft(draft.getDraftJson());
+        AppUser user = draft.getUser();
+        return new AdminAssistantDraftResponse(
+                draft.getId(),
+                draft.getThreadId(),
+                draft.getStatus(),
+                user.getUsername(),
+                user.getDisplayName(),
+                payload.productId(),
+                payload.productName(),
+                payload.quantity(),
+                payload.unitPrice(),
+                payload.totalAmount(),
+                payload.note(),
+                draft.getCreatedAt());
     }
 
     private OrderStatus parseStatus(String rawStatus) {
@@ -268,9 +356,48 @@ public class AdminService {
         return current + " | " + suffix;
     }
 
+    private DraftPayload parseDraft(String draftJson) {
+        var matcher = DRAFT_PATTERN.matcher(draftJson == null ? "" : draftJson);
+        if (!matcher.find()) {
+            throw new IllegalArgumentException("AI 下单草稿格式无效");
+        }
+        return new DraftPayload(
+                Long.valueOf(matcher.group("productId")),
+                matcher.group("productName"),
+                Integer.valueOf(matcher.group("quantity")),
+                new BigDecimal(matcher.group("unitPrice")),
+                new BigDecimal(matcher.group("totalAmount")),
+                matcher.group("note"));
+    }
+
+    private void applyShipmentDetails(ShopOrder order, String shippingCarrier, String trackingNo) {
+        String normalizedCarrier = blankToNull(shippingCarrier);
+        String normalizedTrackingNo = blankToNull(trackingNo);
+        if (normalizedCarrier == null || normalizedTrackingNo == null) {
+            throw new IllegalArgumentException("标记发货时请填写物流公司和运单号");
+        }
+        order.setShippingCarrier(normalizedCarrier);
+        order.setTrackingNo(normalizedTrackingNo);
+        order.setShippedAt(Instant.now());
+    }
+
+    private String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
     private void restoreStockForOrder(ShopOrder order) {
         for (var item : orderItemRepository.findByOrder(order)) {
             productService.increaseStockBySku(item.getProductSku(), item.getQuantity());
         }
     }
+
+    private record DraftPayload(Long productId,
+                                String productName,
+                                Integer quantity,
+                                BigDecimal unitPrice,
+                                BigDecimal totalAmount,
+                                String note) {}
 }

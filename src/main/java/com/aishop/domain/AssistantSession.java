@@ -23,6 +23,9 @@ public class AssistantSession extends BaseEntity {
     @Column(length = 128)
     private String lastIntent;
 
+    @Column(nullable = false, length = 32)
+    private String serviceStatus;
+
     public AppUser getUser() {
         return user;
     }
@@ -53,5 +56,13 @@ public class AssistantSession extends BaseEntity {
 
     public void setLastIntent(String lastIntent) {
         this.lastIntent = lastIntent;
+    }
+
+    public String getServiceStatus() {
+        return serviceStatus;
+    }
+
+    public void setServiceStatus(String serviceStatus) {
+        this.serviceStatus = serviceStatus;
     }
 }

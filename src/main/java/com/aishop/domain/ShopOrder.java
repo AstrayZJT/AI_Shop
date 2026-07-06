@@ -1,6 +1,7 @@
 package com.aishop.domain;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -30,6 +31,14 @@ public class ShopOrder extends BaseEntity {
 
     @Column(nullable = false, length = 512)
     private String shippingAddress;
+
+    @Column(length = 64)
+    private String shippingCarrier;
+
+    @Column(length = 64)
+    private String trackingNo;
+
+    private Instant shippedAt;
 
     @Column(length = 512)
     private String riskNote;
@@ -72,6 +81,30 @@ public class ShopOrder extends BaseEntity {
 
     public void setShippingAddress(String shippingAddress) {
         this.shippingAddress = shippingAddress;
+    }
+
+    public String getShippingCarrier() {
+        return shippingCarrier;
+    }
+
+    public void setShippingCarrier(String shippingCarrier) {
+        this.shippingCarrier = shippingCarrier;
+    }
+
+    public String getTrackingNo() {
+        return trackingNo;
+    }
+
+    public void setTrackingNo(String trackingNo) {
+        this.trackingNo = trackingNo;
+    }
+
+    public Instant getShippedAt() {
+        return shippedAt;
+    }
+
+    public void setShippedAt(Instant shippedAt) {
+        this.shippedAt = shippedAt;
     }
 
     public String getRiskNote() {

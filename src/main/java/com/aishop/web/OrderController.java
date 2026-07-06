@@ -16,6 +16,7 @@ import com.aishop.dto.OrderDtos.OrderActionRequest;
 import com.aishop.dto.OrderDtos.OrderDraftRequest;
 import com.aishop.dto.OrderDtos.OrderDraftResponse;
 import com.aishop.dto.OrderDtos.OrderResponse;
+import com.aishop.dto.OrderDtos.UpdateShippingAddressRequest;
 import com.aishop.service.AuthService;
 import com.aishop.service.OrderService;
 
@@ -79,5 +80,16 @@ public class OrderController {
                                 @PathVariable Long id,
                                 @RequestBody(required = false) OrderActionRequest request) {
         return orderService.requestRefund(authService.requireUser(session), id, request == null ? null : request.note());
+    }
+
+    @PatchMapping("/api/orders/{id}/shipping-address")
+    public OrderResponse updateShippingAddress(HttpSession session,
+                                               @PathVariable Long id,
+                                               @RequestBody UpdateShippingAddressRequest request) {
+        return orderService.updateShippingAddress(
+                authService.requireUser(session),
+                id,
+                request.shippingAddress(),
+                request.note());
     }
 }

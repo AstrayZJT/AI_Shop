@@ -2,6 +2,7 @@ package com.aishop.service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,8 +29,11 @@ import dev.langchain4j.model.chat.ChatModel;
 public class AssistantService {
 
     private static final Logger log = LoggerFactory.getLogger(AssistantService.class);
+    private static final String SERVICE_STATUS_ACTIVE = "ACTIVE";
     private static final Pattern ORDER_NO_PATTERN = Pattern.compile("ORD-[A-Z0-9]{8}");
     private static final Pattern PURCHASE_QUANTITY_PATTERN = Pattern.compile("(?:买|购买|下单|来|要|购入)\\D{0,4}(\\d{1,2}|一|二|两|三|四|五|六|七|八|九|十)\\s*(?:个|件|台|部|副|双|盒)?");
+    private static final Pattern ADDRESS_UPDATE_PATTERN = Pattern.compile("(?:改成|改为|修改为|修改成|更新为|更新成|收货地址为|地址为)(?<address>.+)$");
+    private static final Pattern ACTION_NOTE_PATTERN = Pattern.compile("(?:因为|原因是|原因|备注|说明)[：:，,\\s]*(?<note>.+)$");
 
     private final AssistantSessionRepository sessionRepository;
     private final AssistantMessageRepository messageRepository;
@@ -69,6 +73,7 @@ public class AssistantService {
         session.setTitle("智能助手会话");
         session.setSummary("新会话");
         session.setLastIntent("unknown");
+        session.setServiceStatus(SERVICE_STATUS_ACTIVE);
         return sessionRepository.save(session);
     }
 
@@ -109,8 +114,17 @@ public class AssistantService {
         log.info("assistant context: sessionId={}, intent={}, sourceCount={}",
                 session.getId(), intent, sources.size());
 
-        var answer = buildAnswer(user, intent, sources, matchedProducts, recentOrders, exactOrder, message, currentThreadId);
-        var draftJson = buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts, requestedQuantity);
+        var actionExecution = executeDirectAction(user, message, allOrders, exactOrder);
+        if (actionExecution != null) {
+            intent = actionExecution.intent();
+        }
+
+        var answer = actionExecution == null
+                ? buildAnswer(user, intent, sources, matchedProducts, recentOrders, exactOrder, message, currentThreadId)
+                : actionExecution.answer();
+        var draftJson = actionExecution == null
+                ? buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts, requestedQuantity)
+                : null;
         log.info("assistant response: sessionId={}, intent={}, draftCreated={}, answer={}",
                 session.getId(), intent, draftJson != null, preview(answer));
 
@@ -214,6 +228,114 @@ public class AssistantService {
         }
     }
 
+    private ActionExecution executeDirectAction(AppUser user,
+                                                String message,
+                                                List<OrderResponse> allOrders,
+                                                OrderResponse exactOrder) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        if (isCancelIntent(message) && wantsDirectExecution(message)) {
+            if (exactOrder != null) {
+                if (!canCancel(exactOrder)) {
+                    return new ActionExecution(
+                            "订单 %s 当前状态是 %s，暂不支持直接取消。通常只有待发货或处理中订单可以取消。"
+                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
+                            "order_action");
+                }
+                OrderResponse updated = orderService.cancelOrder(user, exactOrder.id(), extractActionNote(message, "AI 客服代提交取消申请"));
+                return new ActionExecution(
+                        "我已经帮你取消订单 %s，当前状态是 %s。".formatted(updated.orderNo(), statusLabel(updated.status())),
+                        "order_action");
+            }
+            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canCancel);
+            if (candidate == null) {
+                return new ActionExecution(buildActionOrderPrompt("取消订单", eligibleOrders(allOrders, this::canCancel), "你当前没有可取消的订单。"), "order_action");
+            }
+            OrderResponse updated = orderService.cancelOrder(user, candidate.id(), extractActionNote(message, "AI 客服代提交取消申请"));
+            return new ActionExecution(
+                    "我已经帮你取消订单 %s，当前状态是 %s。".formatted(updated.orderNo(), statusLabel(updated.status())),
+                    "order_action");
+        }
+        if (isConfirmReceiptIntent(message) && wantsDirectExecution(message)) {
+            if (exactOrder != null) {
+                if (!canConfirmReceipt(exactOrder)) {
+                    return new ActionExecution(
+                            "订单 %s 当前状态是 %s，只有已发货订单才能直接确认收货。"
+                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
+                            "order_action");
+                }
+                OrderResponse updated = orderService.confirmReceipt(user, exactOrder.id());
+                return new ActionExecution(
+                        "我已经帮你确认收货，订单 %s 当前状态是 %s。".formatted(updated.orderNo(), statusLabel(updated.status())),
+                        "order_action");
+            }
+            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canConfirmReceipt);
+            if (candidate == null) {
+                return new ActionExecution(buildActionOrderPrompt("确认收货", eligibleOrders(allOrders, this::canConfirmReceipt), "你当前没有可确认收货的订单。"), "order_action");
+            }
+            OrderResponse updated = orderService.confirmReceipt(user, candidate.id());
+            return new ActionExecution(
+                    "我已经帮你确认收货，订单 %s 当前状态是 %s。".formatted(updated.orderNo(), statusLabel(updated.status())),
+                    "order_action");
+        }
+        if (isRefundIntent(message) && wantsDirectExecution(message) && !isPurchaseIntent(message)) {
+            if (exactOrder != null) {
+                if (!canRefund(exactOrder)) {
+                    return new ActionExecution(
+                            "订单 %s 当前状态是 %s，暂不支持直接申请退款。通常已发货或已完成订单可以发起退款。"
+                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
+                            "order_action");
+                }
+                OrderResponse updated = orderService.requestRefund(user, exactOrder.id(), extractActionNote(message, "AI 客服代提交退款申请"));
+                return new ActionExecution(
+                        "我已经帮你提交退款申请，订单 %s 当前状态是 %s。平台会继续审核处理。"
+                                .formatted(updated.orderNo(), statusLabel(updated.status())),
+                        "order_action");
+            }
+            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canRefund);
+            if (candidate == null) {
+                return new ActionExecution(buildActionOrderPrompt("申请退款", eligibleOrders(allOrders, this::canRefund), "你当前没有符合退款条件的订单。"), "order_action");
+            }
+            OrderResponse updated = orderService.requestRefund(user, candidate.id(), extractActionNote(message, "AI 客服代提交退款申请"));
+            return new ActionExecution(
+                    "我已经帮你提交退款申请，订单 %s 当前状态是 %s。平台会继续审核处理。"
+                            .formatted(updated.orderNo(), statusLabel(updated.status())),
+                    "order_action");
+        }
+        if (isAddressIntent(message) && wantsDirectExecution(message)) {
+            String newAddress = extractNewShippingAddress(message);
+            if (newAddress == null) {
+                return new ActionExecution(
+                        "我可以直接帮你改订单地址。你把新的收货地址完整发给我就行，例如：帮我把订单 ORD-12345678 的地址改成上海市徐汇区漕溪北路 399 号。",
+                        "order_action");
+            }
+            if (exactOrder != null) {
+                if (!canUpdateShippingAddress(exactOrder)) {
+                    return new ActionExecution(
+                            "订单 %s 当前状态是 %s，暂不支持直接改这个订单的地址。通常只有待发货或处理中订单还能在线改址。"
+                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
+                            "order_action");
+                }
+                OrderResponse updated = orderService.updateShippingAddress(user, exactOrder.id(), newAddress, "AI 客服代修改收货地址");
+                return new ActionExecution(
+                        "我已经帮你把订单 %s 的收货地址改成 %s。当前状态还是 %s。"
+                                .formatted(updated.orderNo(), updated.shippingAddress(), statusLabel(updated.status())),
+                        "order_action");
+            }
+            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canUpdateShippingAddress);
+            if (candidate == null) {
+                return new ActionExecution(buildActionOrderPrompt("修改收货地址", eligibleOrders(allOrders, this::canUpdateShippingAddress), "你当前没有支持改地址的待发货订单。"), "order_action");
+            }
+            OrderResponse updated = orderService.updateShippingAddress(user, candidate.id(), newAddress, "AI 客服代修改收货地址");
+            return new ActionExecution(
+                    "我已经帮你把订单 %s 的收货地址改成 %s。当前状态还是 %s。"
+                            .formatted(updated.orderNo(), updated.shippingAddress(), statusLabel(updated.status())),
+                    "order_action");
+        }
+        return null;
+    }
+
     private String buildDraftIfNeeded(AppUser user,
                                       String intent,
                                       String threadId,
@@ -264,7 +386,7 @@ public class AssistantService {
         if (text.contains("退款") || text.contains("退货") || text.contains("售后") || text.contains("保修")) {
             return "after_sales";
         }
-        if (text.contains("地址") && (text.contains("修改") || text.contains("更改") || text.contains("更新") || text.contains("收货"))) {
+        if (text.contains("地址") && (text.contains("修改") || text.contains("更改") || text.contains("更新") || text.contains("改成") || text.contains("改为") || text.contains("收货"))) {
             return "profile";
         }
         if (text.contains("下单") || text.contains("买") || text.contains("结算") || text.contains("订单") || text.contains("物流") || text.contains("发货")) {
@@ -286,7 +408,13 @@ public class AssistantService {
 
     private boolean isOrderLookupIntent(String message) {
         String text = message == null ? "" : message.toLowerCase();
-        return text.contains("订单") || text.contains("物流") || text.contains("发货") || text.contains("状态") || text.contains("到哪");
+        return text.contains("订单")
+                || text.contains("物流")
+                || text.contains("发货")
+                || text.contains("状态")
+                || text.contains("到哪")
+                || text.contains("快递")
+                || text.contains("运单");
     }
 
     private boolean isCancelIntent(String message) {
@@ -306,12 +434,39 @@ public class AssistantService {
 
     private boolean isAddressIntent(String message) {
         String text = message == null ? "" : message.toLowerCase();
-        return text.contains("地址") && (text.contains("修改") || text.contains("更改") || text.contains("更新") || text.contains("收货"));
+        return text.contains("地址")
+                && (text.contains("修改")
+                || text.contains("更改")
+                || text.contains("更新")
+                || text.contains("改成")
+                || text.contains("改为")
+                || text.contains("收货"));
     }
 
     private boolean isKnowledgePolicyIntent(String message) {
         String text = message == null ? "" : message.toLowerCase();
         return text.contains("规则") || text.contains("政策") || text.contains("说明") || text.contains("faq");
+    }
+
+    private boolean wantsDirectExecution(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        boolean asksHow = text.contains("怎么") || text.contains("如何") || text.contains("能不能") || text.contains("可以吗") || text.contains("可不可以");
+        boolean asksInfo = text.contains("是什么") || text.contains("规则") || text.contains("政策") || text.contains("支持吗");
+        boolean explicitAction = text.contains("帮我")
+                || text.contains("给我")
+                || text.contains("直接")
+                || text.contains("现在")
+                || text.contains("马上")
+                || text.contains("立刻")
+                || text.contains("提交")
+                || text.contains("申请一下")
+                || text.contains("取消一下")
+                || text.contains("确认一下")
+                || text.contains("改成")
+                || text.contains("改为")
+                || text.contains("修改为")
+                || text.contains("修改成");
+        return explicitAction && !asksHow && !asksInfo;
     }
 
     private int extractRequestedQuantity(String message) {
@@ -353,7 +508,76 @@ public class AssistantService {
         return ORDER_NO_PATTERN.matcher(text.toUpperCase()).find()
                 || text.contains("这个订单")
                 || text.contains("我的订单")
-                || text.contains("最近订单");
+                || text.contains("最近订单")
+                || text.contains("最新订单");
+    }
+
+    private List<OrderResponse> eligibleOrders(List<OrderResponse> orders, Predicate<OrderResponse> predicate) {
+        return orders.stream().filter(predicate).toList();
+    }
+
+    private OrderResponse resolveDirectActionOrder(String message,
+                                                   List<OrderResponse> orders,
+                                                   Predicate<OrderResponse> predicate) {
+        List<OrderResponse> eligible = eligibleOrders(orders, predicate);
+        if (eligible.isEmpty()) {
+            return null;
+        }
+        String text = message == null ? "" : message.toLowerCase();
+        if (eligible.size() == 1) {
+            return eligible.get(0);
+        }
+        if (text.contains("最近") || text.contains("最新")) {
+            return eligible.get(0);
+        }
+        if (text.contains("这个订单") || text.contains("这笔订单") || text.contains("该订单")) {
+            return eligible.size() == 1 ? eligible.get(0) : null;
+        }
+        return null;
+    }
+
+    private String buildActionOrderPrompt(String actionLabel, List<OrderResponse> eligibleOrders, String emptyMessage) {
+        if (eligibleOrders.isEmpty()) {
+            return emptyMessage;
+        }
+        return "我可以直接帮你%s，但你当前有多笔符合条件的订单。请补充订单号，例如：%s。"
+                .formatted(actionLabel, eligibleOrders.stream()
+                        .limit(3)
+                        .map(OrderResponse::orderNo)
+                        .reduce((left, right) -> left + " / " + right)
+                        .orElse("ORD-XXXXXXXX"));
+    }
+
+    private String extractActionNote(String message, String defaultNote) {
+        Matcher matcher = ACTION_NOTE_PATTERN.matcher(message == null ? "" : message);
+        if (!matcher.find()) {
+            return defaultNote;
+        }
+        String note = matcher.group("note");
+        return sanitizeTailText(note, defaultNote);
+    }
+
+    private String extractNewShippingAddress(String message) {
+        Matcher matcher = ADDRESS_UPDATE_PATTERN.matcher(message == null ? "" : message);
+        if (!matcher.find()) {
+            return null;
+        }
+        return sanitizeTailText(matcher.group("address"), null);
+    }
+
+    private String sanitizeTailText(String value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String normalized = value.trim()
+                .replace("。", "")
+                .replace("！", "")
+                .replace("!", "")
+                .replace("？", "")
+                .replace("?", "")
+                .replace("；", "")
+                .replace(";", "");
+        return normalized.isBlank() ? fallback : normalized;
     }
 
     private OrderResponse findMentionedOrder(String message, List<OrderResponse> orders, OrderResponse exactOrder) {
@@ -459,11 +683,15 @@ public class AssistantService {
         if (focusOrder == null) {
             return currentAddress + "。你可以在客户端“我的资料”里直接修改，保存后购物车结算会优先带出新地址。";
         }
+        if (canUpdateShippingAddress(focusOrder)) {
+            return currentAddress + "。订单 %s 当前状态是 %s，发货前还支持直接改这个订单的收货地址。你可以在“我的订单”里填写新地址后点击“修改地址”。"
+                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
+        }
         if ("SHIPPED".equals(focusOrder.status()) || "COMPLETED".equals(focusOrder.status()) || "REFUND_REQUESTED".equals(focusOrder.status())) {
             return currentAddress + "。订单 %s 当前状态是 %s，这类订单通常已经不支持在线改址；你仍然可以先更新默认地址，后续订单会使用新地址。"
                     .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
         }
-        return currentAddress + "。如果你是想修改后续下单地址，直接在“我的资料”里保存即可；如果你想处理订单 %s，当前状态是 %s，建议先更新默认地址，再根据情况取消重下。"
+        return currentAddress + "。如果你是想修改后续下单地址，直接在“我的资料”里保存即可；如果你想处理订单 %s，当前状态是 %s，建议优先联系平台人工处理。"
                 .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
     }
 
@@ -502,12 +730,30 @@ public class AssistantService {
         return "SHIPPED".equals(order.status()) || "COMPLETED".equals(order.status());
     }
 
+    private boolean canUpdateShippingAddress(OrderResponse order) {
+        return "CONFIRMED".equals(order.status()) || "PROCESSING".equals(order.status());
+    }
+
     private String formatOrderDetail(OrderResponse order) {
-        return "%s[%s, 金额%s, 地址%s]".formatted(
-                order.orderNo(),
-                statusLabel(order.status()),
-                order.totalAmount(),
-                order.shippingAddress() == null ? "待补充" : order.shippingAddress());
+        StringBuilder builder = new StringBuilder();
+        builder.append(order.orderNo())
+                .append("[")
+                .append(statusLabel(order.status()))
+                .append(", 金额")
+                .append(order.totalAmount())
+                .append(", 地址")
+                .append(order.shippingAddress() == null ? "待补充" : order.shippingAddress());
+        if (order.shippingCarrier() != null && !order.shippingCarrier().isBlank()) {
+            builder.append(", 物流").append(order.shippingCarrier());
+        }
+        if (order.trackingNo() != null && !order.trackingNo().isBlank()) {
+            builder.append(", 运单").append(order.trackingNo());
+        }
+        if (order.shippedAt() != null) {
+            builder.append(", 发货时间").append(order.shippedAt());
+        }
+        builder.append("]");
+        return builder.toString();
     }
 
     private String statusLabel(String status) {
@@ -537,4 +783,6 @@ public class AssistantService {
                 .reduce((left, right) -> left + " | " + right)
                 .orElse("无");
     }
+
+    private record ActionExecution(String answer, String intent) {}
 }

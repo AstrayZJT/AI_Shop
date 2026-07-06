@@ -9,4 +9,5 @@ import com.aishop.domain.AssistantSession;
 
 public interface AssistantMessageRepository extends JpaRepository<AssistantMessage, Long> {
     List<AssistantMessage> findBySessionOrderByCreatedAtAsc(AssistantSession session);
+    long countBySession(AssistantSession session);
 }

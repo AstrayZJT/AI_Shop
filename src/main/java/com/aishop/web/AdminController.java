@@ -12,6 +12,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.aishop.dto.AdminDtos.AdminOrderResponse;
+import com.aishop.dto.AdminDtos.AdminAssistantDraftResponse;
+import com.aishop.dto.AdminDtos.AdminAssistantMessageResponse;
+import com.aishop.dto.AdminDtos.AdminAssistantSessionResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
 import com.aishop.dto.AdminDtos.DashboardMetricResponse;
 import com.aishop.dto.AdminDtos.KnowledgeDocumentResponse;
@@ -79,7 +82,7 @@ public class AdminController {
                                                 @PathVariable Long id,
                                                 @RequestBody UpdateOrderStatusRequest request) {
         authService.requireAdmin(session);
-        return adminService.updateOrderStatus(id, request.status(), request.note());
+        return adminService.updateOrderStatus(id, request.status(), request.note(), request.shippingCarrier(), request.trackingNo());
     }
 
     @PatchMapping("/api/admin/orders/{id}/refund-review")
@@ -112,5 +115,23 @@ public class AdminController {
     public List<AdminUserResponse> users(HttpSession session) {
         authService.requireAdmin(session);
         return adminService.listUsers();
+    }
+
+    @GetMapping("/api/admin/assistant/sessions")
+    public List<AdminAssistantSessionResponse> assistantSessions(HttpSession session) {
+        authService.requireAdmin(session);
+        return adminService.listAssistantSessions();
+    }
+
+    @GetMapping("/api/admin/assistant/sessions/{id}/messages")
+    public List<AdminAssistantMessageResponse> assistantMessages(HttpSession session, @PathVariable Long id) {
+        authService.requireAdmin(session);
+        return adminService.assistantMessages(id);
+    }
+
+    @GetMapping("/api/admin/assistant/drafts")
+    public List<AdminAssistantDraftResponse> assistantDrafts(HttpSession session) {
+        authService.requireAdmin(session);
+        return adminService.listPendingAssistantDrafts();
     }
 }

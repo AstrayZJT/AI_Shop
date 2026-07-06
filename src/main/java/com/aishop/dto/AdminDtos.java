@@ -40,11 +40,14 @@ public final class AdminDtos {
                                      String displayName,
                                      BigDecimal totalAmount,
                                      String shippingAddress,
+                                     String shippingCarrier,
+                                     String trackingNo,
+                                     Instant shippedAt,
                                      String riskNote,
                                      Instant createdAt,
                                      List<AdminOrderItemResponse> items) {}
 
-    public record UpdateOrderStatusRequest(String status, String note) {}
+    public record UpdateOrderStatusRequest(String status, String note, String shippingCarrier, String trackingNo) {}
 
     public record RefundReviewRequest(Boolean approved, String note) {}
 
@@ -64,4 +67,34 @@ public final class AdminDtos {
                                     String phone,
                                     String shippingAddress,
                                     Instant createdAt) {}
+
+    public record AdminAssistantSessionResponse(Long id,
+                                                String threadId,
+                                                String title,
+                                                String summary,
+                                                String lastIntent,
+                                                String serviceStatus,
+                                                String username,
+                                                String displayName,
+                                                long messageCount,
+                                                Instant createdAt) {}
+
+    public record AdminAssistantMessageResponse(String role,
+                                                String content,
+                                                Instant createdAt) {}
+
+    public record AdminAssistantDraftResponse(Long id,
+                                              String threadId,
+                                              String status,
+                                              String username,
+                                              String displayName,
+                                              Long productId,
+                                              String productName,
+                                              Integer quantity,
+                                              BigDecimal unitPrice,
+                                              BigDecimal totalAmount,
+                                              String note,
+                                              Instant createdAt) {}
+
+    public record AdminAssistantReplyRequest(String content, Boolean resolve) {}
 }

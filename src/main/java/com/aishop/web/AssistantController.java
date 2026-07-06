@@ -39,7 +39,7 @@ public class AssistantController {
     public List<SessionResponse> sessions(HttpSession session) {
         var user = authService.requireUser(session);
         return assistantService.listSessions(user).stream()
-                .map(s -> new SessionResponse(s.getId(), s.getTitle(), s.getSummary(), s.getLastIntent()))
+                .map(s -> new SessionResponse(s.getId(), s.getTitle(), s.getSummary(), s.getLastIntent(), s.getServiceStatus()))
                 .toList();
     }
 
@@ -47,21 +47,21 @@ public class AssistantController {
     public CreateSessionResponse createSession(HttpSession session) {
         var user = authService.requireUser(session);
         var created = assistantService.createSession(user);
-        return new CreateSessionResponse(created.getId(), created.getTitle(), created.getSummary(), created.getLastIntent());
+        return new CreateSessionResponse(created.getId(), created.getTitle(), created.getSummary(), created.getLastIntent(), created.getServiceStatus());
     }
 
     @GetMapping("/api/assistant/sessions/{id}")
     public SessionResponse session(@PathVariable Long id, HttpSession session) {
         var user = authService.requireUser(session);
         var s = assistantService.getOrCreateSession(user, id);
-        return new SessionResponse(s.getId(), s.getTitle(), s.getSummary(), s.getLastIntent());
+        return new SessionResponse(s.getId(), s.getTitle(), s.getSummary(), s.getLastIntent(), s.getServiceStatus());
     }
 
     @GetMapping("/api/assistant/sessions/{id}/messages")
     public List<MessageResponse> messages(@PathVariable Long id, HttpSession session) {
         var user = authService.requireUser(session);
         return assistantService.messages(id, user).stream()
-                .map(m -> new MessageResponse(m.getRole(), m.getContent()))
+                .map(m -> new MessageResponse(m.getRole(), m.getContent(), m.getCreatedAt()))
                 .toList();
     }
 }

@@ -489,9 +489,19 @@ textarea {
   background: var(--surface);
 }
 
+.order-address-input {
+  background: var(--surface);
+}
+
 .admin-order-note-input {
   min-height: 86px;
   background: var(--surface);
+}
+
+.shipment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .order-actions {
@@ -525,10 +535,35 @@ textarea {
   align-items: start;
 }
 
+.assistant-ops-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.8fr);
+  gap: 18px;
+  align-items: start;
+}
+
 .ops-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.assistant-session-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.admin-session-pill {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 6px;
+}
+
+.admin-chat-feed {
+  min-height: 340px;
 }
 
 .panel-section {
@@ -613,7 +648,9 @@ textarea {
 @media (max-width: 1180px) {
   .storefront-grid,
   .ops-grid,
+  .assistant-ops-grid,
   .ops-columns,
+  .assistant-session-layout,
   .split-grid,
   .masthead-grid {
     grid-template-columns: 1fr;
@@ -656,7 +693,8 @@ textarea {
 
   .product-grid,
   .orders-grid,
-  .metric-grid {
+  .metric-grid,
+  .shipment-grid {
     grid-template-columns: 1fr;
   }
 }

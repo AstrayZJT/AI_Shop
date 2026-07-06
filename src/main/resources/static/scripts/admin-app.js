@@ -7,6 +7,10 @@ const adminState = {
   knowledgeMatches: [],
   knowledgeSearchKeyword: "",
   users: [],
+  assistantSessions: [],
+  assistantMessages: [],
+  assistantDrafts: [],
+  selectedAssistantSessionId: null,
   editingProductId: null,
   orderFilterStatus: "ALL",
   orderFilterKeyword: "",
@@ -175,6 +179,8 @@ function matchesOrderFilter(order) {
     order.username,
     order.displayName,
     order.shippingAddress,
+    order.shippingCarrier,
+    order.trackingNo,
     order.riskNote,
     statusLabel(order.status),
     ...(order.items || []).flatMap((item) => [
@@ -294,6 +300,10 @@ function renderShipmentQueue() {
         <div class="inline-meta">金额 ${money(order.totalAmount)}</div>
         <div class="inline-meta">地址 ${escapeHtml(order.shippingAddress || "待补充地址")}</div>
       </div>
+      <div class="shipment-grid">
+        <input class="ops-shipping-carrier-input" data-order-id="${order.id}" placeholder="物流公司，例如顺丰" value="${escapeHtml(order.shippingCarrier || "")}">
+        <input class="ops-tracking-no-input" data-order-id="${order.id}" placeholder="运单号" value="${escapeHtml(order.trackingNo || "")}">
+      </div>
       <div class="order-items">
         ${(order.items || []).map((item) => `
           <div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity}</div>
@@ -311,6 +321,8 @@ function renderShipmentQueue() {
       Number(button.dataset.orderId),
       button.dataset.nextStatus,
       button.dataset.note,
+      readOpsShippingCarrier(Number(button.dataset.orderId)),
+      readOpsTrackingNo(Number(button.dataset.orderId)),
     )));
   });
   bindFocusOrderButtons(host);
@@ -378,6 +390,128 @@ function renderOperationsWorkbench() {
   renderRefundQueue();
   renderShipmentQueue();
   renderLowStockList();
+}
+
+function renderAssistantOperations() {
+  renderAssistantSessions();
+  renderAssistantSessionDetail();
+  renderAssistantDrafts();
+}
+
+function renderAssistantSessions() {
+  const host = adminById("adminAssistantSessionList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看 AI 客服会话。</div>`;
+    return;
+  }
+  if (!adminState.assistantSessions.length) {
+    host.innerHTML = `<div class="empty-state">当前还没有 AI 客服会话记录。</div>`;
+    return;
+  }
+
+  host.innerHTML = adminState.assistantSessions.map((session) => `
+    <button type="button" class="session-pill admin-session-pill ${adminState.selectedAssistantSessionId === session.id ? "active" : ""}" data-assistant-session-id="${session.id}">
+      <strong>${escapeHtml(session.displayName || session.username)}</strong>
+      <div class="inline-meta">${escapeHtml(session.lastIntent || "chat")} · ${escapeHtml(formatDateTime(session.createdAt))}</div>
+      <div class="inline-meta">${escapeHtml(session.summary || "暂无摘要")}</div>
+      <div class="inline-meta">${escapeHtml(session.threadId)} · ${session.messageCount} 条消息</div>
+    </button>
+  `).join("");
+
+  host.querySelectorAll("[data-assistant-session-id]").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => selectAssistantSession(Number(button.dataset.assistantSessionId))));
+  });
+}
+
+function renderAssistantSessionDetail() {
+  const meta = adminById("adminAssistantSessionMeta");
+  const host = adminById("adminAssistantMessages");
+  if (!meta || !host) {
+    return;
+  }
+  if (!adminState.user) {
+    meta.textContent = "管理员登录后可查看 AI 会话摘要。";
+    host.innerHTML = `<div class="empty-state">登录后可查看 AI 会话消息。</div>`;
+    return;
+  }
+  const session = adminState.assistantSessions.find((item) => item.id === adminState.selectedAssistantSessionId);
+  if (!session) {
+    meta.textContent = "选择左侧会话后，这里会展示用户、线程、摘要和意图。";
+    host.innerHTML = `<div class="empty-state">当前还没有选中的 AI 会话。</div>`;
+    return;
+  }
+
+  meta.textContent = `用户：${session.displayName || session.username} | 会话：${session.threadId} | 意图：${session.lastIntent || "chat"} | 消息数：${session.messageCount}`;
+  if (!adminState.assistantMessages.length) {
+    host.innerHTML = `<div class="empty-state">当前会话还没有消息。</div>`;
+    return;
+  }
+
+  host.innerHTML = adminState.assistantMessages.map((message) => `
+    <div class="message-bubble ${message.role}">
+      <div>${escapeHtml(message.content).replaceAll("\n", "<br>")}</div>
+      <div class="inline-meta">${escapeHtml(formatDateTime(message.createdAt))}</div>
+    </div>
+  `).join("");
+  host.scrollTop = host.scrollHeight;
+}
+
+function renderAssistantDrafts() {
+  const host = adminById("adminAssistantDraftList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看 AI 下单草稿。</div>`;
+    return;
+  }
+  if (!adminState.assistantDrafts.length) {
+    host.innerHTML = `<div class="empty-state">当前没有待确认的 AI 下单草稿。</div>`;
+    return;
+  }
+
+  host.innerHTML = adminState.assistantDrafts.map((draft) => `
+    <article class="queue-card">
+      <div class="row-top">
+        <div>
+          <strong>${escapeHtml(draft.productName)}</strong>
+          <div class="inline-meta">${escapeHtml(draft.displayName || draft.username)} / ${escapeHtml(draft.username)}</div>
+        </div>
+        <div class="tag success">${escapeHtml(statusLabel(draft.status))}</div>
+      </div>
+      <div class="queue-meta">
+        <div class="inline-meta">线程 ${escapeHtml(draft.threadId)}</div>
+        <div class="inline-meta">数量 ${draft.quantity} · 单价 ${money(draft.unitPrice)} · 合计 ${money(draft.totalAmount)}</div>
+        <div class="inline-meta">创建时间 ${formatDateTime(draft.createdAt)}</div>
+      </div>
+      <div class="panel-hint">${escapeHtml(draft.note || "用户确认后会转成正式订单。")}</div>
+      ${renderAssistantDraftActions(draft)}
+    </article>
+  `).join("");
+
+  host.querySelectorAll(".assistant-focus-session-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => selectAssistantSession(Number(button.dataset.assistantSessionId), true)));
+  });
+}
+
+function renderAssistantDraftActions(draft) {
+  const sessionId = extractAssistantSessionId(draft.threadId);
+  if (!sessionId) {
+    return "";
+  }
+  return `
+    <div class="order-actions">
+      <button type="button" class="ghost assistant-focus-session-btn" data-assistant-session-id="${sessionId}">查看会话</button>
+    </div>
+  `;
+}
+
+function extractAssistantSessionId(threadId) {
+  const match = String(threadId || "").match(/^assistant-(\\d+)$/);
+  return match ? Number(match[1]) : null;
 }
 
 function renderProducts() {
@@ -488,6 +622,7 @@ function renderOrders() {
         <div class="inline-meta">创建时间 ${formatDateTime(order.createdAt)}</div>
         <div class="inline-meta">金额 ${money(order.totalAmount)} · 地址 ${escapeHtml(order.shippingAddress || "待补充地址")}</div>
       </div>
+      ${renderAdminOrderShippingMeta(order)}
       ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
       <div class="order-items">
         ${(order.items || []).map((item) => `
@@ -535,6 +670,12 @@ function renderAdminOrderControls(order) {
   return `
     <div class="order-action-block">
       <textarea class="admin-order-note-input" data-order-id="${order.id}" placeholder="${escapeHtml(notePlaceholder)}"></textarea>
+      ${shouldShowAdminShippingFields(order, nextStatuses)
+        ? `<div class="shipment-grid">
+            <input class="admin-shipping-carrier-input" data-order-id="${order.id}" placeholder="物流公司，例如顺丰" value="${escapeHtml(order.shippingCarrier || "")}">
+            <input class="admin-tracking-no-input" data-order-id="${order.id}" placeholder="运单号" value="${escapeHtml(order.trackingNo || "")}">
+          </div>`
+        : ""}
       <div class="order-actions">
         <select class="order-status-select" data-order-id="${order.id}">
           ${nextStatuses.map((status) => `<option value="${status}">${escapeHtml(statusLabel(status))}</option>`).join("")}
@@ -561,6 +702,24 @@ function availableNextStatuses(status) {
     default:
       return [];
   }
+}
+
+function shouldShowAdminShippingFields(order, nextStatuses) {
+  return nextStatuses.includes("SHIPPED") || Boolean(order.shippingCarrier) || Boolean(order.trackingNo);
+}
+
+function renderAdminOrderShippingMeta(order) {
+  const lines = [];
+  if (order.shippingCarrier) {
+    lines.push(`<div class="inline-meta">物流公司 ${escapeHtml(order.shippingCarrier)}</div>`);
+  }
+  if (order.trackingNo) {
+    lines.push(`<div class="inline-meta">运单号 ${escapeHtml(order.trackingNo)}</div>`);
+  }
+  if (order.shippedAt) {
+    lines.push(`<div class="inline-meta">发货时间 ${escapeHtml(formatDateTime(order.shippedAt))}</div>`);
+  }
+  return lines.join("");
 }
 
 function renderKnowledgeDocs() {
@@ -696,6 +855,10 @@ function clearAdminDataState() {
   adminState.knowledgeMatches = [];
   adminState.knowledgeSearchKeyword = "";
   adminState.users = [];
+  adminState.assistantSessions = [];
+  adminState.assistantMessages = [];
+  adminState.assistantDrafts = [];
+  adminState.selectedAssistantSessionId = null;
   adminState.editingProductId = null;
 }
 
@@ -707,18 +870,21 @@ async function loadAdminData() {
     renderProducts();
     renderOrderFilterTabs();
     renderOrders();
+    renderAssistantOperations();
     renderKnowledgeDocs();
     renderKnowledgeSearchResults();
     renderUsers();
     return;
   }
 
-  const [dashboard, products, orders, knowledgeDocs, users] = await Promise.all([
+  const [dashboard, products, orders, knowledgeDocs, users, assistantSessions, assistantDrafts] = await Promise.all([
     adminFetchJson("/api/admin/dashboard"),
     adminFetchJson("/api/admin/products"),
     adminFetchJson("/api/admin/orders"),
     adminFetchJson("/api/admin/knowledge/documents"),
     adminFetchJson("/api/admin/users"),
+    adminFetchJson("/api/admin/assistant/sessions"),
+    adminFetchJson("/api/admin/assistant/drafts"),
   ]);
 
   adminState.dashboard = dashboard;
@@ -726,15 +892,37 @@ async function loadAdminData() {
   adminState.orders = orders || [];
   adminState.knowledgeDocs = knowledgeDocs || [];
   adminState.users = users || [];
+  adminState.assistantSessions = assistantSessions || [];
+  adminState.assistantDrafts = assistantDrafts || [];
+
+  const sessionStillExists = adminState.assistantSessions.some((session) => session.id === adminState.selectedAssistantSessionId);
+  if (!sessionStillExists) {
+    adminState.selectedAssistantSessionId = adminState.assistantSessions[0]?.id || null;
+  }
+  if (adminState.selectedAssistantSessionId) {
+    adminState.assistantMessages = await adminFetchJson(`/api/admin/assistant/sessions/${adminState.selectedAssistantSessionId}/messages`);
+  } else {
+    adminState.assistantMessages = [];
+  }
 
   renderDashboard();
   renderOperationsWorkbench();
   renderProducts();
   renderOrderFilterTabs();
   renderOrders();
+  renderAssistantOperations();
   renderKnowledgeDocs();
   renderKnowledgeSearchResults();
   renderUsers();
+}
+
+async function selectAssistantSession(sessionId, scrollIntoView = false) {
+  adminState.selectedAssistantSessionId = sessionId;
+  adminState.assistantMessages = await adminFetchJson(`/api/admin/assistant/sessions/${sessionId}/messages`);
+  renderAssistantOperations();
+  if (scrollIntoView) {
+    adminById("adminAssistantMessages")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 async function adminLogin() {
@@ -791,16 +979,34 @@ function readRefundQueueNote(orderId) {
   return document.querySelector(`.ops-refund-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
-async function updateOrderStatus(orderId, explicitStatus = null, explicitNote = null) {
+function readOpsShippingCarrier(orderId) {
+  return document.querySelector(`.ops-shipping-carrier-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readOpsTrackingNo(orderId) {
+  return document.querySelector(`.ops-tracking-no-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readAdminShippingCarrier(orderId) {
+  return document.querySelector(`.admin-shipping-carrier-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readAdminTrackingNo(orderId) {
+  return document.querySelector(`.admin-tracking-no-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+async function updateOrderStatus(orderId, explicitStatus = null, explicitNote = null, explicitCarrier = null, explicitTrackingNo = null) {
   const nextStatus = explicitStatus
     || document.querySelector(`.order-status-select[data-order-id="${orderId}"]`)?.value;
   if (!nextStatus) {
     throw new Error("未选择订单状态");
   }
   const note = explicitNote ?? readAdminOrderNote(orderId);
+  const shippingCarrier = explicitCarrier ?? readAdminShippingCarrier(orderId);
+  const trackingNo = explicitTrackingNo ?? readAdminTrackingNo(orderId);
   await adminFetchJson(`/api/admin/orders/${orderId}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status: nextStatus, note }),
+    body: JSON.stringify({ status: nextStatus, note, shippingCarrier, trackingNo }),
   });
   await loadAdminData();
   setAdminStatus(`订单状态已更新为 ${statusLabel(nextStatus)}`);
@@ -911,6 +1117,7 @@ document.addEventListener("DOMContentLoaded", () => {
     adminById("adminPassword").value = "admin123";
   });
   adminById("refreshDashboardBtn").addEventListener("click", () => runAdminAction(loadAdminData));
+  adminById("refreshAssistantOpsBtn").addEventListener("click", () => runAdminAction(loadAdminData));
   adminById("productForm").addEventListener("submit", (event) => runAdminAction(() => saveProduct(event)));
   adminById("resetProductBtn").addEventListener("click", resetProductForm);
   adminById("adminOrderSearchBtn").addEventListener("click", () => runAdminAction(async () => applyOrderSearch()));

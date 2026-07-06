@@ -10,5 +10,7 @@ import com.aishop.domain.AssistantSession;
 
 public interface AssistantSessionRepository extends JpaRepository<AssistantSession, Long> {
     List<AssistantSession> findByUserOrderByCreatedAtDesc(AppUser user);
+    List<AssistantSession> findTop20ByOrderByCreatedAtDesc();
+    List<AssistantSession> findTop20ByServiceStatusOrderByCreatedAtDesc(String serviceStatus);
     Optional<AssistantSession> findByIdAndUser(Long id, AppUser user);
 }

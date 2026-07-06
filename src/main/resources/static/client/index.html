@@ -94,19 +94,20 @@
             <div class="section-head compact">
               <div>
                 <h2>AI 客服</h2>
-                <p>支持商品咨询、订单查询、售后问答、知识库检索和下单草稿生成。</p>
+                <p>支持商品咨询、订单查询、知识库检索，也能直接代办取消订单、确认收货、退款申请和改地址。</p>
               </div>
               <button id="newSessionBtn" type="button" class="ghost">新会话</button>
             </div>
             <div class="quick-prompts">
               <button type="button" class="prompt-btn" data-prompt="帮我推荐一款适合通勤的商品">推荐商品</button>
               <button type="button" class="prompt-btn" data-prompt="帮我查询最近订单状态">查询订单</button>
+              <button type="button" class="prompt-btn" data-prompt="帮我查最近订单的物流信息">查物流</button>
               <button type="button" class="prompt-btn" data-prompt="退款和售后规则是什么">售后规则</button>
               <button type="button" class="prompt-btn" data-prompt="帮我生成一个下单草稿">下单草稿</button>
             </div>
             <div id="sessionList" class="session-strip"></div>
             <div id="assistantMessages" class="chat-feed"></div>
-            <textarea id="assistantInput" placeholder="例如：我想买耳机、帮我查订单、退款规则是什么、怎么改默认地址"></textarea>
+            <textarea id="assistantInput" placeholder="例如：我想买耳机、帮我查订单、帮我取消订单 ORD-12345678、帮我把订单地址改成上海市徐汇区漕溪北路 399 号"></textarea>
             <div class="composer-actions">
               <button id="assistantSendBtn" type="button" class="primary">发送消息</button>
             </div>

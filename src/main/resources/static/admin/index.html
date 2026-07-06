@@ -88,6 +88,37 @@
       </div>
     </section>
 
+    <section class="band">
+      <div class="container assistant-ops-grid">
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>AI 客服会话</h2>
+              <p>查看最近的用户咨询、AI 回复摘要和会话意图，快速判断客服链路是否正常。</p>
+            </div>
+            <button id="refreshAssistantOpsBtn" type="button" class="ghost">刷新 AI 视图</button>
+          </div>
+          <div class="assistant-session-layout">
+            <div id="adminAssistantSessionList" class="stack-list"></div>
+            <div class="panel-section">
+              <div id="adminAssistantSessionMeta" class="assistant-meta"></div>
+              <div id="adminAssistantMessages" class="chat-feed admin-chat-feed"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>AI 下单草稿</h2>
+              <p>集中查看还未确认的 AI 下单草稿，辅助判断用户咨询是否已经接近转化。</p>
+            </div>
+          </div>
+          <div id="adminAssistantDraftList" class="stack-list"></div>
+        </section>
+      </div>
+    </section>
+
     <section class="band muted-band">
       <div class="container split-grid">
         <section class="panel work-panel">

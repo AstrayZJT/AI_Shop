@@ -1,6 +1,7 @@
 package com.aishop.service;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -168,6 +169,25 @@ public class OrderService {
         } catch (Exception ex) {
             throw new IllegalArgumentException("不支持的订单状态: " + rawStatus);
         }
+        if (order.getStatus() == OrderStatus.SHIPPED && order.getShippedAt() == null) {
+            order.setShippedAt(Instant.now());
+        }
+        orderRepository.save(order);
+        return toResponse(order);
+    }
+
+    @Transactional
+    public OrderResponse updateShippingAddress(AppUser user, Long id, String shippingAddress, String note) {
+        ShopOrder order = requireOwnedOrder(user, id);
+        if (!canUpdateShippingAddress(order)) {
+            throw new IllegalArgumentException("当前订单状态暂不支持修改收货地址");
+        }
+        String normalizedAddress = shippingAddress == null ? "" : shippingAddress.trim();
+        if (normalizedAddress.isBlank()) {
+            throw new IllegalArgumentException("请先填写新的收货地址");
+        }
+        order.setShippingAddress(normalizedAddress);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户修改收货地址", note));
         orderRepository.save(order);
         return toResponse(order);
     }
@@ -227,7 +247,17 @@ public class OrderService {
         var items = orderItemRepository.findByOrder(order).stream()
                 .map(item -> new OrderItemResponse(item.getProductName(), item.getQuantity(), item.getUnitPrice(), item.getLineTotal()))
                 .toList();
-        return new OrderResponse(order.getId(), order.getOrderNo(), order.getStatus().name(), order.getTotalAmount(), order.getShippingAddress(), order.getRiskNote(), items);
+        return new OrderResponse(
+                order.getId(),
+                order.getOrderNo(),
+                order.getStatus().name(),
+                order.getTotalAmount(),
+                order.getShippingAddress(),
+                order.getShippingCarrier(),
+                order.getTrackingNo(),
+                order.getShippedAt(),
+                order.getRiskNote(),
+                items);
     }
 
     private ShopOrder requireOwnedOrder(AppUser user, Long id) {
@@ -250,6 +280,10 @@ public class OrderService {
         for (OrderItem item : orderItemRepository.findByOrder(order)) {
             productService.increaseStockBySku(item.getProductSku(), item.getQuantity());
         }
+    }
+
+    private boolean canUpdateShippingAddress(ShopOrder order) {
+        return order.getStatus() == OrderStatus.CONFIRMED || order.getStatus() == OrderStatus.PROCESSING;
     }
 
     private PendingOrderDraftResponse toDraftResponse(PendingOrderDraft draft) {

@@ -269,6 +269,7 @@ function renderOrders() {
         <div class="inline-meta">状态编码 ${escapeHtml(order.status)}</div>
         <div class="inline-meta">金额 ${currency(order.totalAmount)}</div>
         <div class="inline-meta">地址 ${escapeHtml(order.shippingAddress || "待补充收货地址")}</div>
+        ${renderOrderShippingMeta(order)}
         ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
       </div>
       <div class="order-items">
@@ -292,6 +293,9 @@ function renderOrderActionArea(order) {
   if (canCancelOrder(order.status)) {
     buttons.push(`<button type="button" class="ghost order-action-btn" data-order-id="${order.id}" data-action="cancel">取消订单</button>`);
   }
+  if (canUpdateShippingAddress(order.status)) {
+    buttons.push(`<button type="button" class="ghost order-action-btn" data-order-id="${order.id}" data-action="update-address">修改地址</button>`);
+  }
   if (canConfirmReceipt(order.status)) {
     buttons.push(`<button type="button" class="primary order-action-btn" data-order-id="${order.id}" data-action="confirm-receipt">确认收货</button>`);
   }
@@ -302,6 +306,9 @@ function renderOrderActionArea(order) {
   const needsNote = canCancelOrder(order.status) || canRequestRefund(order.status);
   return `
     <div class="order-action-block">
+      ${canUpdateShippingAddress(order.status)
+        ? `<input class="order-address-input" data-order-id="${order.id}" placeholder="发货前可修改当前订单收货地址" value="${escapeHtml(order.shippingAddress || "")}">`
+        : ""}
       ${needsNote ? `<textarea class="order-note-input" data-order-id="${order.id}" placeholder="${escapeHtml(orderActionPlaceholder(order.status))}"></textarea>` : ""}
       <div class="order-actions">
         ${buttons.join("")}
@@ -323,7 +330,7 @@ function orderActionPlaceholder(status) {
 
 function orderActionHint(status) {
   if (canCancelOrder(status)) {
-    return "待发货和处理中订单可以直接在线取消。";
+    return "待发货和处理中订单可以直接在线取消，也支持先改当前订单地址。";
   }
   if (canConfirmReceipt(status)) {
     return "确认收货后，订单会变成已完成。";
@@ -350,6 +357,24 @@ function canConfirmReceipt(status) {
 
 function canRequestRefund(status) {
   return status === "SHIPPED" || status === "COMPLETED";
+}
+
+function canUpdateShippingAddress(status) {
+  return status === "CONFIRMED" || status === "PROCESSING";
+}
+
+function renderOrderShippingMeta(order) {
+  const lines = [];
+  if (order.shippingCarrier) {
+    lines.push(`<div class="inline-meta">物流公司 ${escapeHtml(order.shippingCarrier)}</div>`);
+  }
+  if (order.trackingNo) {
+    lines.push(`<div class="inline-meta">运单号 ${escapeHtml(order.trackingNo)}</div>`);
+  }
+  if (order.shippedAt) {
+    lines.push(`<div class="inline-meta">发货时间 ${escapeHtml(new Date(order.shippedAt).toLocaleString("zh-CN"))}</div>`);
+  }
+  return lines.join("");
 }
 
 function renderSessions() {
@@ -711,12 +736,19 @@ function readOrderNote(orderId) {
   return document.querySelector(`.order-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
+function readOrderAddress(orderId) {
+  return document.querySelector(`.order-address-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
 async function performOrderAction(orderId, action) {
   let url = "";
   let options = { method: "PATCH" };
   if (action === "cancel") {
     url = `/api/orders/${orderId}/cancel`;
     options.body = JSON.stringify({ note: readOrderNote(orderId) });
+  } else if (action === "update-address") {
+    url = `/api/orders/${orderId}/shipping-address`;
+    options.body = JSON.stringify({ shippingAddress: readOrderAddress(orderId), note: "" });
   } else if (action === "confirm-receipt") {
     url = `/api/orders/${orderId}/confirm-receipt`;
   } else if (action === "refund") {
@@ -726,7 +758,11 @@ async function performOrderAction(orderId, action) {
     throw new Error("不支持的订单动作");
   }
   const updatedOrder = await clientFetchJson(url, options);
-  setStoreStatus(`订单 ${updatedOrder.orderNo} 已更新为 ${statusLabel(updatedOrder.status)}`);
+  if (action === "update-address") {
+    setStoreStatus(`订单 ${updatedOrder.orderNo} 的收货地址已更新`);
+  } else {
+    setStoreStatus(`订单 ${updatedOrder.orderNo} 已更新为 ${statusLabel(updatedOrder.status)}`);
+  }
   await loadOrders();
 }
 
