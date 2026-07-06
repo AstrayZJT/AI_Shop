@@ -300,6 +300,10 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 知识库文档导入与检索
 - AI 会话列表
 - 人工接管队列
+- AI 会话认领
+- AI 会话待处理 / 客户未读计数
+- AI 会话首响时间、认领时间、结案时间
+- AI 客服工作台筛选视图（我的待处理、待认领、待回复、客户未读、已结案）
 - 人工客服回复并结案
 
 ### 8.3 AI 客服
@@ -318,7 +322,9 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 直接代办修改发货前订单地址
 - 查询知识库中的售后、物流、政策内容
 - 用户主动要求“转人工”后进入人工接管流程
+- 管理端可认领人工会话，并持续查看待处理数和客户未读状态
 - 管理端人工回复后，消息会回流到客户端会话
+- 人工结案后，用户再次发消息会自动回到 AI 在线状态
 
 ## 9. RAG 是怎么实现的
 
@@ -415,6 +421,17 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - `ESCALATED`
 - `RESOLVED`
 
+当前还补充了这些人工客服运营字段：
+
+- `assigned_admin_id`
+- `assigned_at`
+- `first_support_reply_at`
+- `resolved_at`
+- `last_customer_message_at`
+- `last_support_message_at`
+- `support_unread_count`
+- `customer_unread_count`
+
 为兼容旧 PostgreSQL 表结构，启动时会自动补齐该列：
 
 - `src/main/java/com/aishop/config/LegacyPostgresSchemaMigrator.java`
@@ -479,6 +496,7 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - `GET /api/admin/assistant/sessions`
 - `GET /api/admin/assistant/escalations`
 - `GET /api/admin/assistant/sessions/{id}/messages`
+- `POST /api/admin/assistant/sessions/{id}/claim`
 - `POST /api/admin/assistant/sessions/{id}/reply`
 - `GET /api/admin/assistant/drafts`
 
@@ -486,17 +504,22 @@ AI 会话新增了 `service_status` 字段，用于区分：
 
 ### 12.1 客户端和管理端同时调试
 
-当前客户端和管理端都跑在同一个服务域名下，共用 session cookie。
+当前客户端和管理端都跑在同一个服务域名下，也仍然共用浏览器 cookie。
 
-如果你在同一个浏览器里同时打开客户端和管理端：
+但当前版本已经把登录态拆成了两套 scope：
 
-- 登录 `admin` 可能会顶掉 `demo`
-- 登录 `demo` 也可能会顶掉 `admin`
+- 客户端：`/api/auth/*?scope=customer`
+- 管理端：`/api/auth/*?scope=admin`
+
+所以你现在可以在同一个浏览器里同时保持：
+
+- 客户端登录 `demo`
+- 管理端登录 `admin`
 
 本地联调建议：
 
-- 客户端和管理端用不同浏览器
-- 或者一个用普通窗口，一个用无痕窗口
+- 直接同浏览器双开客户端和管理端
+- 或者一个普通窗口、一个无痕窗口做多账号测试
 
 ### 12.2 8080 端口占用
 

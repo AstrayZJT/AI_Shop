@@ -16,7 +16,11 @@ import jakarta.servlet.http.HttpSession;
 @Service
 public class AuthService {
 
-    public static final String SESSION_USER_ID = "SESSION_USER_ID";
+    public static final String LEGACY_SESSION_USER_ID = "SESSION_USER_ID";
+    public static final String SESSION_CUSTOMER_USER_ID = "SESSION_CUSTOMER_USER_ID";
+    public static final String SESSION_ADMIN_USER_ID = "SESSION_ADMIN_USER_ID";
+    public static final String AUTH_SCOPE_CUSTOMER = "customer";
+    public static final String AUTH_SCOPE_ADMIN = "admin";
 
     private final AppUserRepository userRepository;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -39,13 +43,18 @@ public class AuthService {
         return userRepository.save(user);
     }
 
-    public AppUser login(LoginRequest request, HttpSession session) {
+    public AppUser login(LoginRequest request, HttpSession session, String scope) {
         var user = userRepository.findByUsername(request.username())
                 .orElseThrow(() -> new IllegalArgumentException("用户名或密码错误"));
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw new IllegalArgumentException("用户名或密码错误");
         }
-        session.setAttribute(SESSION_USER_ID, user.getId());
+        String normalizedScope = normalizeScope(scope);
+        if (AUTH_SCOPE_ADMIN.equals(normalizedScope) && user.getRole() != UserRole.ADMIN) {
+            throw new SecurityException("当前账号没有管理端登录权限");
+        }
+        session.removeAttribute(LEGACY_SESSION_USER_ID);
+        session.setAttribute(sessionKey(normalizedScope), user.getId());
         return user;
     }
 
@@ -64,12 +73,55 @@ public class AuthService {
         return userRepository.save(managed);
     }
 
-    public void logout(HttpSession session) {
-        session.invalidate();
+    public void logout(HttpSession session, String scope) {
+        session.removeAttribute(sessionKey(normalizeScope(scope)));
+        if (session.getAttribute(SESSION_CUSTOMER_USER_ID) == null
+                && session.getAttribute(SESSION_ADMIN_USER_ID) == null) {
+            session.removeAttribute(LEGACY_SESSION_USER_ID);
+        }
     }
 
     public AppUser currentUser(HttpSession session) {
-        Object id = session.getAttribute(SESSION_USER_ID);
+        return currentUser(session, AUTH_SCOPE_CUSTOMER);
+    }
+
+    public AppUser currentUser(HttpSession session, String scope) {
+        return loadScopedUser(session, normalizeScope(scope));
+    }
+
+    public AppUser requireUser(HttpSession session) {
+        AppUser user = currentUser(session, AUTH_SCOPE_CUSTOMER);
+        if (user == null) {
+            throw new IllegalStateException("请先登录");
+        }
+        return user;
+    }
+
+    public AppUser requireAdmin(HttpSession session) {
+        AppUser user = currentUser(session, AUTH_SCOPE_ADMIN);
+        if (user == null) {
+            throw new IllegalStateException("请先登录管理员账号");
+        }
+        if (user.getRole() != UserRole.ADMIN) {
+            throw new SecurityException("需要管理员权限");
+        }
+        return user;
+    }
+
+    private AppUser loadScopedUser(HttpSession session, String scope) {
+        AppUser scopedUser = findUserBySessionAttribute(session.getAttribute(sessionKey(scope)));
+        if (scopedUser != null) {
+            return AUTH_SCOPE_ADMIN.equals(scope) && scopedUser.getRole() != UserRole.ADMIN ? null : scopedUser;
+        }
+
+        AppUser legacyUser = findUserBySessionAttribute(session.getAttribute(LEGACY_SESSION_USER_ID));
+        if (legacyUser == null) {
+            return null;
+        }
+        return AUTH_SCOPE_ADMIN.equals(scope) && legacyUser.getRole() != UserRole.ADMIN ? null : legacyUser;
+    }
+
+    private AppUser findUserBySessionAttribute(Object id) {
         if (id instanceof Long userId) {
             return userRepository.findById(userId).orElse(null);
         }
@@ -79,20 +131,15 @@ public class AuthService {
         return null;
     }
 
-    public AppUser requireUser(HttpSession session) {
-        AppUser user = currentUser(session);
-        if (user == null) {
-            throw new IllegalStateException("请先登录");
+    private String normalizeScope(String scope) {
+        if (scope != null && AUTH_SCOPE_ADMIN.equalsIgnoreCase(scope.trim())) {
+            return AUTH_SCOPE_ADMIN;
         }
-        return user;
+        return AUTH_SCOPE_CUSTOMER;
     }
 
-    public AppUser requireAdmin(HttpSession session) {
-        AppUser user = requireUser(session);
-        if (user.getRole() != UserRole.ADMIN) {
-            throw new SecurityException("需要管理员权限");
-        }
-        return user;
+    private String sessionKey(String scope) {
+        return AUTH_SCOPE_ADMIN.equals(scope) ? SESSION_ADMIN_USER_ID : SESSION_CUSTOMER_USER_ID;
     }
 
     private String blankToNull(String value) {

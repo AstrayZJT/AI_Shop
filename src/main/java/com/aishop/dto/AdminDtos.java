@@ -77,6 +77,15 @@ public final class AdminDtos {
                                                 String username,
                                                 String displayName,
                                                 long messageCount,
+                                                String assignedAdminUsername,
+                                                String assignedAdminDisplayName,
+                                                Instant assignedAt,
+                                                Instant firstSupportReplyAt,
+                                                Instant resolvedAt,
+                                                Instant lastCustomerMessageAt,
+                                                Instant lastSupportMessageAt,
+                                                long supportUnreadCount,
+                                                long customerUnreadCount,
                                                 Instant createdAt) {}
 
     public record AdminAssistantMessageResponse(String role,
@@ -97,4 +106,12 @@ public final class AdminDtos {
                                               Instant createdAt) {}
 
     public record AdminAssistantReplyRequest(String content, Boolean resolve) {}
+
+    public record AdminAssistantAssignRequest(String adminUsername) {}
+
+    public record AdminAssistantClaimResponse(Long sessionId,
+                                              String serviceStatus,
+                                              String assignedAdminUsername,
+                                              String assignedAdminDisplayName,
+                                              Instant assignedAt) {}
 }

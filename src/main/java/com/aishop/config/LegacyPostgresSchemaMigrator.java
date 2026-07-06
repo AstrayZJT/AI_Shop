@@ -62,6 +62,7 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
 
         ensureOrderStatusConstraint();
         ensureAssistantSessionServiceStatus();
+        ensureAssistantSessionOpsFields();
 
         log.info("Checked PostgreSQL audit columns for {} tables", checkedTables);
     }
@@ -118,5 +119,23 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
         jdbcTemplate.update(
                 "UPDATE assistant_sessions SET service_status = COALESCE(NULLIF(TRIM(service_status), ''), 'ACTIVE') WHERE service_status IS NULL OR TRIM(service_status) = ''");
         jdbcTemplate.execute("ALTER TABLE assistant_sessions ALTER COLUMN service_status SET NOT NULL");
+    }
+
+    private void ensureAssistantSessionOpsFields() {
+        if (!tableExists("assistant_sessions")) {
+            return;
+        }
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS assigned_admin_id BIGINT");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP WITH TIME ZONE");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS first_support_reply_at TIMESTAMP WITH TIME ZONE");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS last_customer_message_at TIMESTAMP WITH TIME ZONE");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS last_support_message_at TIMESTAMP WITH TIME ZONE");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS support_unread_count BIGINT");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS customer_unread_count BIGINT");
+        jdbcTemplate.update(
+                "UPDATE assistant_sessions SET support_unread_count = COALESCE(support_unread_count, 0), customer_unread_count = COALESCE(customer_unread_count, 0) WHERE support_unread_count IS NULL OR customer_unread_count IS NULL");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ALTER COLUMN support_unread_count SET NOT NULL");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ALTER COLUMN customer_unread_count SET NOT NULL");
     }
 }

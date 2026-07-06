@@ -4,6 +4,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.aishop.dto.AuthDtos.LoginRequest;
@@ -30,19 +31,21 @@ public class AuthController {
     }
 
     @PostMapping("/api/auth/login")
-    public UserResponse login(@RequestBody LoginRequest request, HttpSession session) {
-        var user = authService.login(request, session);
+    public UserResponse login(@RequestBody LoginRequest request,
+                              HttpSession session,
+                              @RequestParam(required = false) String scope) {
+        var user = authService.login(request, session, scope);
         return toUserResponse(user);
     }
 
     @PostMapping("/api/auth/logout")
-    public void logout(HttpSession session) {
-        authService.logout(session);
+    public void logout(HttpSession session, @RequestParam(required = false) String scope) {
+        authService.logout(session, scope);
     }
 
     @GetMapping("/api/auth/me")
-    public UserResponse me(HttpSession session) {
-        var user = authService.currentUser(session);
+    public UserResponse me(HttpSession session, @RequestParam(required = false) String scope) {
+        var user = authService.currentUser(session, scope);
         if (user == null) {
             return null;
         }

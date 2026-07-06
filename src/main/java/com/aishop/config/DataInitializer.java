@@ -61,6 +61,24 @@ public class DataInitializer {
                 userRepository.save(admin);
             });
 
+            userRepository.findByUsername("support1").ifPresentOrElse(user -> {
+                if (user.getRole() != UserRole.ADMIN) {
+                    user.setRole(UserRole.ADMIN);
+                }
+                user.setDisplayName("客服专员一号");
+                user.setPreferencesSummary("负责 AI 客服会话跟进与售后协调");
+                userRepository.save(user);
+            }, () -> {
+                var support = new AppUser();
+                support.setUsername("support1");
+                support.setDisplayName("客服专员一号");
+                support.setPasswordHash(encoder.encode("support123"));
+                support.setShippingAddress("上海市静安区客服中心 9 号");
+                support.setPreferencesSummary("负责 AI 客服会话跟进与售后协调");
+                support.setRole(UserRole.ADMIN);
+                userRepository.save(support);
+            });
+
             var electronics = categoryRepository.findByName("数码").orElseGet(() -> {
                 var c = new ProductCategory();
                 c.setName("数码");

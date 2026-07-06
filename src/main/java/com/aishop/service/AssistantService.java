@@ -1,5 +1,6 @@
 package com.aishop.service;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
@@ -77,6 +78,8 @@ public class AssistantService {
         session.setSummary("新会话");
         session.setLastIntent("unknown");
         session.setServiceStatus(SERVICE_STATUS_ACTIVE);
+        session.setSupportUnreadCount(0L);
+        session.setCustomerUnreadCount(0L);
         return sessionRepository.save(session);
     }
 
@@ -92,17 +95,15 @@ public class AssistantService {
         AssistantSession session = getOrCreateSession(user, sessionId);
         boolean alreadyEscalated = SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()));
         String normalizedNote = blankToNull(note);
-        if (normalizedNote != null) {
-            saveMessage(session, "user", "申请人工客服：" + normalizedNote);
-        }
-
+        String requestText = normalizedNote == null ? "申请人工客服" : "申请人工客服：" + normalizedNote;
         markSessionEscalated(session);
+        saveMessage(session, "user", requestText);
         String answer = alreadyEscalated
                 ? "你的会话已经在人工跟进中，我把你刚补充的说明也同步给人工客服了。"
                 : "我已经帮你转接人工客服，接下来管理员可以在后台直接回复你。";
         session.setSummary(composeSummary(
                 session.getSummary(),
-                normalizedNote == null ? "申请人工客服" : "申请人工客服：" + normalizedNote,
+                requestText,
                 answer));
         sessionRepository.save(session);
         saveMessage(session, "assistant", answer);
@@ -118,6 +119,7 @@ public class AssistantService {
         var session = getOrCreateSession(user, sessionId);
         if (SERVICE_STATUS_RESOLVED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
             session.setServiceStatus(SERVICE_STATUS_ACTIVE);
+            session.setResolvedAt(null);
         }
         var currentThreadId = threadId == null || threadId.isBlank() ? "assistant-" + session.getId() : threadId;
         log.info("assistant request: user={}, sessionId={}, threadId={}, message={}",
@@ -169,19 +171,36 @@ public class AssistantService {
         return new ChatResponse(session.getId(), answer, intent, currentThreadId, sources, draftJson);
     }
 
+    @Transactional
     public List<AssistantMessage> messages(Long sessionId, AppUser user) {
         if (user == null) {
             throw new IllegalArgumentException("请先登录");
         }
         var session = sessionRepository.findByIdAndUser(sessionId, user)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+        if (safeUnreadCount(session.getCustomerUnreadCount()) > 0L) {
+            session.setCustomerUnreadCount(0L);
+            sessionRepository.save(session);
+        }
         return messageRepository.findBySessionOrderByCreatedAtAsc(session);
     }
 
     private AssistantSession normalizeServiceStatus(AssistantSession session) {
         String normalized = normalizeServiceStatus(session.getServiceStatus());
+        boolean changed = false;
         if (!normalized.equals(session.getServiceStatus())) {
             session.setServiceStatus(normalized);
+            changed = true;
+        }
+        if (session.getSupportUnreadCount() == null) {
+            session.setSupportUnreadCount(0L);
+            changed = true;
+        }
+        if (session.getCustomerUnreadCount() == null) {
+            session.setCustomerUnreadCount(0L);
+            changed = true;
+        }
+        if (changed) {
             return sessionRepository.save(session);
         }
         return session;
@@ -432,6 +451,7 @@ public class AssistantService {
     private void markSessionEscalated(AssistantSession session) {
         session.setServiceStatus(SERVICE_STATUS_ESCALATED);
         session.setLastIntent("handoff");
+        session.setResolvedAt(null);
     }
 
     private String trim(String text, int maxLen) {
@@ -453,7 +473,8 @@ public class AssistantService {
         msg.setSession(session);
         msg.setRole(role);
         msg.setContent(content);
-        messageRepository.save(msg);
+        AssistantMessage saved = messageRepository.save(msg);
+        updateSessionActivity(session, role, saved.getCreatedAt());
     }
 
     private String blankToNull(String value) {
@@ -461,6 +482,33 @@ public class AssistantService {
             return null;
         }
         return value.trim();
+    }
+
+    private void updateSessionActivity(AssistantSession session, String role, Instant messageTime) {
+        boolean changed = false;
+        if ("user".equals(role)) {
+            session.setLastCustomerMessageAt(messageTime);
+            session.setCustomerUnreadCount(0L);
+            if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
+                session.setSupportUnreadCount(safeUnreadCount(session.getSupportUnreadCount()) + 1L);
+            }
+            changed = true;
+        } else if ("support".equals(role)) {
+            session.setLastSupportMessageAt(messageTime);
+            session.setSupportUnreadCount(0L);
+            session.setCustomerUnreadCount(safeUnreadCount(session.getCustomerUnreadCount()) + 1L);
+            if (session.getFirstSupportReplyAt() == null) {
+                session.setFirstSupportReplyAt(messageTime);
+            }
+            changed = true;
+        }
+        if (changed) {
+            sessionRepository.save(session);
+        }
+    }
+
+    private long safeUnreadCount(Long count) {
+        return count == null ? 0L : count;
     }
 
     private String detectIntent(String message) {

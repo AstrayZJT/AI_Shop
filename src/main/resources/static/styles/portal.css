@@ -403,9 +403,61 @@ textarea {
   text-align: left;
 }
 
+.session-pill.has-unread {
+  border-color: rgba(194, 65, 12, 0.28);
+}
+
 .session-pill.active {
   border-color: rgba(15, 118, 110, 0.28);
   background: rgba(15, 118, 110, 0.08);
+}
+
+.assistant-session-flags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.assistant-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.assistant-summary-item {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-alt);
+  border: 1px solid rgba(15, 23, 42, 0.05);
+}
+
+.assistant-summary-item.warning {
+  background: rgba(194, 65, 12, 0.08);
+}
+
+.assistant-summary-item.danger {
+  background: rgba(185, 28, 28, 0.08);
+}
+
+.assistant-summary-item.success {
+  background: rgba(15, 118, 110, 0.08);
+}
+
+.assistant-summary-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.assistant-summary-item strong {
+  font-size: 22px;
+}
+
+.assistant-filter-tabs {
+  margin-bottom: 14px;
 }
 
 .chat-feed {

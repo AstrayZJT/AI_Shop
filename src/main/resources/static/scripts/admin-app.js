@@ -15,6 +15,7 @@ const adminState = {
   editingProductId: null,
   orderFilterStatus: "ALL",
   orderFilterKeyword: "",
+  assistantOpsFilter: "ALL",
 };
 
 const ADMIN_STATUS_LABELS = {
@@ -44,9 +45,23 @@ const ASSISTANT_SERVICE_STATUS_LABELS = {
   ESCALATED: "人工跟进中",
   RESOLVED: "人工已回复",
 };
+const ASSISTANT_OPS_FILTERS = [
+  { key: "ALL", label: "全部会话" },
+  { key: "MY_QUEUE", label: "我的待处理" },
+  { key: "UNCLAIMED", label: "待认领" },
+  { key: "WAITING", label: "待回复" },
+  { key: "SLA_RISK", label: "首响超时" },
+  { key: "CUSTOMER_UNREAD", label: "客户未读" },
+  { key: "RESOLVED", label: "已结案" },
+];
+const ADMIN_AUTH_SCOPE = "admin";
 
 function adminById(id) {
   return document.getElementById(id);
+}
+
+function adminAuthUrl(url) {
+  return `${url}${url.includes("?") ? "&" : "?"}scope=${ADMIN_AUTH_SCOPE}`;
 }
 
 async function adminFetchJson(url, options = {}) {
@@ -113,6 +128,176 @@ function assistantMessageRoleLabel(role) {
 
 function currentAdminAssistantSession() {
   return adminState.assistantSessions.find((item) => item.id === adminState.selectedAssistantSessionId) || null;
+}
+
+function adminOperators() {
+  return adminState.users.filter((user) => user.role === "ADMIN");
+}
+
+function isClaimedByCurrentAdmin(session) {
+  return Boolean(
+    session
+    && adminState.user
+    && session.assignedAdminUsername
+    && session.assignedAdminUsername === adminState.user.username,
+  );
+}
+
+function assistantOwnerLabel(session) {
+  if (!session) {
+    return "未认领";
+  }
+  return session.assignedAdminDisplayName || session.assignedAdminUsername || "未认领";
+}
+
+function formatElapsedLabel(value) {
+  if (!value) {
+    return "时间未知";
+  }
+  const diffMs = Math.max(0, Date.now() - new Date(value).getTime());
+  const totalMinutes = Math.floor(diffMs / 60000);
+  if (totalMinutes < 1) {
+    return "刚刚";
+  }
+  if (totalMinutes < 60) {
+    return `${totalMinutes} 分钟`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) {
+    return minutes ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`;
+  }
+  const days = Math.floor(hours / 24);
+  const remainHours = hours % 24;
+  return remainHours ? `${days} 天 ${remainHours} 小时` : `${days} 天`;
+}
+
+function assistantWaitingLabel(session) {
+  const baseTime = session?.lastCustomerMessageAt || session?.createdAt;
+  return baseTime ? `等待 ${formatElapsedLabel(baseTime)}` : "等待时间未知";
+}
+
+function assistantWaitingMinutes(session) {
+  const baseTime = session?.lastCustomerMessageAt || session?.createdAt;
+  if (!baseTime) {
+    return 0;
+  }
+  return Math.max(0, Math.floor((Date.now() - new Date(baseTime).getTime()) / 60000));
+}
+
+function isEscalatedSession(session) {
+  return session?.serviceStatus === "ESCALATED";
+}
+
+function needsSupportReply(session) {
+  return isEscalatedSession(session) && Number(session?.supportUnreadCount || 0) > 0;
+}
+
+function isCustomerUnreadSession(session) {
+  return Number(session?.customerUnreadCount || 0) > 0;
+}
+
+function isUnclaimedEscalation(session) {
+  return isEscalatedSession(session) && !session?.assignedAdminUsername;
+}
+
+function isMyAssistantQueue(session) {
+  return Boolean(session && adminState.user && session.assignedAdminUsername === adminState.user.username && session.serviceStatus !== "RESOLVED");
+}
+
+function isAssistantSlaRisk(session) {
+  return isEscalatedSession(session) && !session?.firstSupportReplyAt && assistantWaitingMinutes(session) >= 30;
+}
+
+function assistantFilterCount(filterKey) {
+  return adminState.assistantSessions.filter((session) => matchesAssistantOpsFilter(session, filterKey)).length;
+}
+
+function matchesAssistantOpsFilter(session, filterKey = adminState.assistantOpsFilter) {
+  switch (filterKey) {
+    case "MY_QUEUE":
+      return isMyAssistantQueue(session);
+    case "UNCLAIMED":
+      return isUnclaimedEscalation(session);
+    case "WAITING":
+      return needsSupportReply(session);
+    case "SLA_RISK":
+      return isAssistantSlaRisk(session);
+    case "CUSTOMER_UNREAD":
+      return isCustomerUnreadSession(session);
+    case "RESOLVED":
+      return session?.serviceStatus === "RESOLVED";
+    default:
+      return true;
+  }
+}
+
+function filteredAssistantSessions() {
+  return adminState.assistantSessions.filter((session) => matchesAssistantOpsFilter(session));
+}
+
+function renderAssistantOpsSummary() {
+  const host = adminById("assistantOpsSummary");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = "";
+    return;
+  }
+  const sessions = adminState.assistantSessions;
+  const items = [
+    { label: "待处理会话", value: sessions.filter(needsSupportReply).length, tone: "warning" },
+    { label: "待认领", value: sessions.filter(isUnclaimedEscalation).length, tone: "danger" },
+    { label: "我的待处理", value: sessions.filter(isMyAssistantQueue).length, tone: "success" },
+    { label: "客户未读", value: sessions.filter(isCustomerUnreadSession).length, tone: "default" },
+    { label: "首响超时", value: sessions.filter(isAssistantSlaRisk).length, tone: "danger" },
+  ];
+  host.innerHTML = items.map((item) => `
+    <div class="assistant-summary-item ${item.tone}">
+      <span class="assistant-summary-label">${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value)}</strong>
+    </div>
+  `).join("");
+}
+
+function renderAssistantOpsFilters() {
+  const host = adminById("assistantOpsFilters");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = ASSISTANT_OPS_FILTERS.map((filter) => `
+    <button type="button" class="${adminState.assistantOpsFilter === filter.key ? "active" : ""}" data-assistant-filter-key="${filter.key}">
+      ${escapeHtml(filter.label)} · ${assistantFilterCount(filter.key)}
+    </button>
+  `).join("");
+  host.querySelectorAll("[data-assistant-filter-key]").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => applyAssistantOpsFilter(button.dataset.assistantFilterKey)));
+  });
+}
+
+function renderAssistantFlagTags(session) {
+  const tags = [];
+  if (isAssistantSlaRisk(session)) {
+    tags.push(`<span class="tag danger">首响超时</span>`);
+  }
+  if (Number(session?.supportUnreadCount || 0) > 0) {
+    tags.push(`<span class="tag warning">待处理 ${session.supportUnreadCount}</span>`);
+  }
+  if (Number(session?.customerUnreadCount || 0) > 0) {
+    tags.push(`<span class="tag">客户未读 ${session.customerUnreadCount}</span>`);
+  }
+  if (isClaimedByCurrentAdmin(session)) {
+    tags.push(`<span class="tag success">我在跟进</span>`);
+  }
+  if (!session?.assignedAdminUsername && session?.serviceStatus === "ESCALATED") {
+    tags.push(`<span class="tag danger">待认领</span>`);
+  }
+  return tags.length ? `<div class="assistant-session-flags">${tags.join("")}</div>` : "";
 }
 
 function formatDateTime(value) {
@@ -428,6 +613,8 @@ function renderOperationsWorkbench() {
 }
 
 function renderAssistantOperations() {
+  renderAssistantOpsSummary();
+  renderAssistantOpsFilters();
   renderAssistantSessions();
   renderAssistantSessionDetail();
   renderAssistantEscalations();
@@ -443,20 +630,26 @@ function renderAssistantSessions() {
     host.innerHTML = `<div class="empty-state">登录后可查看 AI 客服会话。</div>`;
     return;
   }
+  const sessions = filteredAssistantSessions();
   if (!adminState.assistantSessions.length) {
     host.innerHTML = `<div class="empty-state">当前还没有 AI 客服会话记录。</div>`;
     return;
   }
+  if (!sessions.length) {
+    host.innerHTML = `<div class="empty-state">当前筛选条件下没有会话，可以切换到其他客服视图。</div>`;
+    return;
+  }
 
-  host.innerHTML = adminState.assistantSessions.map((session) => `
-    <button type="button" class="session-pill admin-session-pill ${adminState.selectedAssistantSessionId === session.id ? "active" : ""}" data-assistant-session-id="${session.id}">
+  host.innerHTML = sessions.map((session) => `
+    <button type="button" class="session-pill admin-session-pill ${adminState.selectedAssistantSessionId === session.id ? "active" : ""} ${Number(session.supportUnreadCount || 0) > 0 ? "has-unread" : ""}" data-assistant-session-id="${session.id}">
       <div class="row-top">
         <strong>${escapeHtml(session.displayName || session.username)}</strong>
         <div class="tag ${assistantServiceTagClass(session.serviceStatus)}">${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</div>
       </div>
-      <div class="inline-meta">${escapeHtml(session.lastIntent || "chat")} · ${escapeHtml(formatDateTime(session.createdAt))}</div>
+      <div class="inline-meta">${escapeHtml(session.lastIntent || "chat")} · ${escapeHtml(assistantOwnerLabel(session))}</div>
       <div class="inline-meta">${escapeHtml(session.summary || "暂无摘要")}</div>
-      <div class="inline-meta">${escapeHtml(session.threadId)} · ${session.messageCount} 条消息</div>
+      <div class="inline-meta">${escapeHtml(session.threadId)} · ${session.messageCount} 条消息 · ${escapeHtml(assistantWaitingLabel(session))}</div>
+      ${renderAssistantFlagTags(session)}
     </button>
   `).join("");
 
@@ -471,13 +664,16 @@ function renderAssistantSessionDetail() {
   const replyInput = adminById("adminAssistantReplyInput");
   const replyBtn = adminById("adminAssistantReplyBtn");
   const resolveBtn = adminById("adminAssistantResolveBtn");
-  if (!meta || !host || !replyInput || !replyBtn || !resolveBtn) {
+  const claimBtn = adminById("adminAssistantClaimBtn");
+  if (!meta || !host || !replyInput || !replyBtn || !resolveBtn || !claimBtn) {
     return;
   }
   if (!adminState.user) {
     meta.textContent = "管理员登录后可查看 AI 会话摘要。";
     host.innerHTML = `<div class="empty-state">登录后可查看 AI 会话消息。</div>`;
     setAssistantReplyState(true, "登录后可发送人工回复");
+    claimBtn.disabled = true;
+    claimBtn.textContent = "认领会话";
     return;
   }
   const session = currentAdminAssistantSession();
@@ -485,16 +681,30 @@ function renderAssistantSessionDetail() {
     meta.textContent = "选择左侧会话后，这里会展示用户、线程、摘要和意图。";
     host.innerHTML = `<div class="empty-state">当前还没有选中的 AI 会话。</div>`;
     setAssistantReplyState(true, "先选择一条 AI 会话");
+    claimBtn.disabled = true;
+    claimBtn.textContent = "认领会话";
     return;
   }
 
+  const ownedByMe = isClaimedByCurrentAdmin(session);
   setAssistantReplyState(false, session.serviceStatus === "ESCALATED"
-    ? "当前会话已转人工，输入回复后客户端会立即看到"
+    ? (ownedByMe
+      ? "当前会话由你跟进中，发送回复后客户端会立即看到"
+      : (session.assignedAdminUsername
+        ? `当前会话由 ${assistantOwnerLabel(session)} 跟进，发送回复会自动转交到当前管理员名下`
+        : "当前会话还未认领，发送回复时会自动认领"))
     : "可以主动给用户发送人工回复，也可以发送并结案");
+  claimBtn.disabled = session.serviceStatus !== "ESCALATED" || ownedByMe;
+  claimBtn.textContent = session.serviceStatus !== "ESCALATED"
+    ? "无需认领"
+    : (ownedByMe ? "已认领" : (session.assignedAdminUsername ? "接管到我" : "认领会话"));
   meta.innerHTML = `
     <div><strong>用户：</strong>${escapeHtml(session.displayName || session.username)} / ${escapeHtml(session.username)}</div>
     <div><strong>会话：</strong>${escapeHtml(session.threadId)} · <strong>状态：</strong>${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</div>
-    <div><strong>意图：</strong>${escapeHtml(session.lastIntent || "chat")} · <strong>消息数：</strong>${session.messageCount}</div>
+    <div><strong>跟进人：</strong>${escapeHtml(assistantOwnerLabel(session))} · <strong>意图：</strong>${escapeHtml(session.lastIntent || "chat")}</div>
+    <div><strong>消息数：</strong>${session.messageCount} · <strong>待处理：</strong>${session.supportUnreadCount || 0} · <strong>客户未读：</strong>${session.customerUnreadCount || 0}</div>
+    <div><strong>最近客户消息：</strong>${escapeHtml(formatDateTime(session.lastCustomerMessageAt))} · <strong>等待：</strong>${escapeHtml(assistantWaitingLabel(session))}</div>
+    <div><strong>认领时间：</strong>${escapeHtml(formatDateTime(session.assignedAt))} · <strong>首响：</strong>${escapeHtml(formatDateTime(session.firstSupportReplyAt))} · <strong>结案：</strong>${escapeHtml(formatDateTime(session.resolvedAt))}</div>
     <div><strong>摘要：</strong>${escapeHtml(session.summary || "暂无摘要")}</div>
   `;
   if (!adminState.assistantMessages.length) {
@@ -537,10 +747,15 @@ function renderAssistantEscalations() {
       </div>
       <div class="queue-meta">
         <div class="inline-meta">线程 ${escapeHtml(session.threadId)}</div>
-        <div class="inline-meta">意图 ${escapeHtml(session.lastIntent || "chat")} · 消息 ${session.messageCount} 条</div>
+        <div class="inline-meta">意图 ${escapeHtml(session.lastIntent || "chat")} · 消息 ${session.messageCount} 条 · ${escapeHtml(assistantWaitingLabel(session))}</div>
+        <div class="inline-meta">跟进人 ${escapeHtml(assistantOwnerLabel(session))} · 首响 ${escapeHtml(formatDateTime(session.firstSupportReplyAt))}</div>
       </div>
+      ${renderAssistantFlagTags(session)}
       <div class="panel-hint">${escapeHtml(session.summary || "等待客服查看详情")}</div>
       <div class="order-actions">
+        ${session.serviceStatus === "ESCALATED" && !isClaimedByCurrentAdmin(session)
+          ? `<button type="button" class="secondary assistant-claim-session-btn" data-assistant-session-id="${session.id}">${escapeHtml(session.assignedAdminUsername ? "接管到我" : "认领会话")}</button>`
+          : ""}
         <button type="button" class="ghost assistant-focus-session-btn" data-assistant-session-id="${session.id}">查看会话</button>
       </div>
     </article>
@@ -548,6 +763,9 @@ function renderAssistantEscalations() {
 
   host.querySelectorAll(".assistant-focus-session-btn").forEach((button) => {
     button.addEventListener("click", () => runAdminAction(() => selectAssistantSession(Number(button.dataset.assistantSessionId), true)));
+  });
+  host.querySelectorAll(".assistant-claim-session-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => claimAssistantSession(Number(button.dataset.assistantSessionId))));
   });
 }
 
@@ -927,7 +1145,7 @@ function fillProductForm(productId, scrollIntoView = false) {
 }
 
 async function loadAdminMe() {
-  adminState.user = await adminFetchJson("/api/auth/me");
+  adminState.user = await adminFetchJson(adminAuthUrl("/api/auth/me"));
   if (!adminState.user) {
     setAdminStatus("等待管理员登录");
     return;
@@ -953,6 +1171,7 @@ function clearAdminDataState() {
   adminState.assistantDrafts = [];
   adminState.selectedAssistantSessionId = null;
   adminState.editingProductId = null;
+  adminState.assistantOpsFilter = "ALL";
 }
 
 async function loadAdminData() {
@@ -990,9 +1209,10 @@ async function loadAdminData() {
   adminState.assistantEscalations = assistantEscalations || [];
   adminState.assistantDrafts = assistantDrafts || [];
 
-  const sessionStillExists = adminState.assistantSessions.some((session) => session.id === adminState.selectedAssistantSessionId);
-  if (!sessionStillExists) {
-    adminState.selectedAssistantSessionId = adminState.assistantSessions[0]?.id || null;
+  const visibleSessions = filteredAssistantSessions();
+  const sessionStillVisible = visibleSessions.some((session) => session.id === adminState.selectedAssistantSessionId);
+  if (!sessionStillVisible) {
+    adminState.selectedAssistantSessionId = visibleSessions[0]?.id || null;
   }
   if (adminState.selectedAssistantSessionId) {
     adminState.assistantMessages = await adminFetchJson(`/api/admin/assistant/sessions/${adminState.selectedAssistantSessionId}/messages`);
@@ -1011,6 +1231,22 @@ async function loadAdminData() {
   renderUsers();
 }
 
+async function applyAssistantOpsFilter(filterKey) {
+  adminState.assistantOpsFilter = filterKey || "ALL";
+  const visibleSessions = filteredAssistantSessions();
+  const sessionStillVisible = visibleSessions.some((session) => session.id === adminState.selectedAssistantSessionId);
+  if (!sessionStillVisible) {
+    adminState.selectedAssistantSessionId = visibleSessions[0]?.id || null;
+    if (adminState.selectedAssistantSessionId) {
+      clearAssistantReplyInput();
+      adminState.assistantMessages = await adminFetchJson(`/api/admin/assistant/sessions/${adminState.selectedAssistantSessionId}/messages`);
+    } else {
+      adminState.assistantMessages = [];
+    }
+  }
+  renderAssistantOperations();
+}
+
 async function selectAssistantSession(sessionId, scrollIntoView = false) {
   adminState.selectedAssistantSessionId = sessionId;
   clearAssistantReplyInput();
@@ -1027,7 +1263,7 @@ async function adminLogin() {
   if (!username || !password) {
     throw new Error("请输入管理员账号和密码");
   }
-  await adminFetchJson("/api/auth/login", {
+  await adminFetchJson(adminAuthUrl("/api/auth/login"), {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
@@ -1035,7 +1271,7 @@ async function adminLogin() {
 }
 
 async function adminLogout() {
-  await adminFetchJson("/api/auth/logout", { method: "POST" });
+  await adminFetchJson(adminAuthUrl("/api/auth/logout"), { method: "POST" });
   adminState.user = null;
   clearAdminDataState();
   await loadAdminData();
@@ -1119,6 +1355,19 @@ function setAssistantReplyState(disabled, placeholder) {
   }
 }
 
+async function claimAssistantSession(sessionId = adminState.selectedAssistantSessionId) {
+  if (!sessionId) {
+    throw new Error("请先选择要认领的 AI 会话");
+  }
+  adminState.selectedAssistantSessionId = sessionId;
+  adminState.assistantOpsFilter = "MY_QUEUE";
+  await adminFetchJson(`/api/admin/assistant/sessions/${sessionId}/claim`, {
+    method: "POST",
+  });
+  await loadAdminData();
+  setAdminStatus("AI 会话已认领，可以继续跟进和发送人工回复");
+}
+
 async function replyAssistantSession(resolve = false) {
   if (!adminState.selectedAssistantSessionId) {
     throw new Error("请先选择要回复的 AI 会话");
@@ -1131,6 +1380,7 @@ async function replyAssistantSession(resolve = false) {
     method: "POST",
     body: JSON.stringify({ content, resolve }),
   });
+  adminState.assistantOpsFilter = resolve ? "RESOLVED" : "MY_QUEUE";
   clearAssistantReplyInput();
   await loadAdminData();
   setAdminStatus(resolve ? "人工客服回复已发送，并已将当前会话结案" : "人工客服回复已发送到客户端会话");
@@ -1259,6 +1509,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   adminById("refreshDashboardBtn").addEventListener("click", () => runAdminAction(loadAdminData));
   adminById("refreshAssistantOpsBtn").addEventListener("click", () => runAdminAction(loadAdminData));
+  adminById("adminAssistantClaimBtn").addEventListener("click", () => runAdminAction(() => claimAssistantSession()));
   adminById("adminAssistantReplyBtn").addEventListener("click", () => runAdminAction(() => replyAssistantSession(false)));
   adminById("adminAssistantResolveBtn").addEventListener("click", () => runAdminAction(() => replyAssistantSession(true)));
   adminById("productForm").addEventListener("submit", (event) => runAdminAction(() => saveProduct(event)));

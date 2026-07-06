@@ -49,7 +49,14 @@ public class AssistantController {
     public CreateSessionResponse createSession(HttpSession session) {
         var user = authService.requireUser(session);
         var created = assistantService.createSession(user);
-        return new CreateSessionResponse(created.getId(), created.getTitle(), created.getSummary(), created.getLastIntent(), serviceStatus(created));
+        return new CreateSessionResponse(
+                created.getId(),
+                created.getTitle(),
+                created.getSummary(),
+                created.getLastIntent(),
+                serviceStatus(created),
+                unreadSupportCount(created),
+                supportAgentDisplayName(created));
     }
 
     @GetMapping("/api/assistant/sessions/{id}")
@@ -82,11 +89,21 @@ public class AssistantController {
                 session.getTitle(),
                 session.getSummary(),
                 session.getLastIntent(),
-                serviceStatus(session));
+                serviceStatus(session),
+                unreadSupportCount(session),
+                supportAgentDisplayName(session));
     }
 
     private String serviceStatus(AssistantSession session) {
         String status = session.getServiceStatus();
         return status == null || status.isBlank() ? "ACTIVE" : status;
+    }
+
+    private long unreadSupportCount(AssistantSession session) {
+        return session.getCustomerUnreadCount() == null ? 0L : session.getCustomerUnreadCount();
+    }
+
+    private String supportAgentDisplayName(AssistantSession session) {
+        return session.getAssignedAdmin() == null ? null : session.getAssignedAdmin().getDisplayName();
     }
 }

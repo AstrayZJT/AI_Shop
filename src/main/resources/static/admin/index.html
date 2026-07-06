@@ -98,14 +98,21 @@
             </div>
             <button id="refreshAssistantOpsBtn" type="button" class="ghost">刷新 AI 视图</button>
           </div>
+          <div id="assistantOpsSummary" class="assistant-summary-grid"></div>
+          <div id="assistantOpsFilters" class="segmented assistant-filter-tabs"></div>
           <div class="assistant-session-layout">
             <div id="adminAssistantSessionList" class="stack-list"></div>
             <div class="panel-section">
               <div id="adminAssistantSessionMeta" class="assistant-meta"></div>
               <div id="adminAssistantMessages" class="chat-feed admin-chat-feed"></div>
+              <div class="assistant-assign-box">
+                <select id="adminAssistantAssignSelect"></select>
+                <button id="adminAssistantAssignBtn" type="button" class="ghost">转交给所选客服</button>
+              </div>
               <div class="assistant-reply-box">
                 <textarea id="adminAssistantReplyInput" placeholder="输入人工客服回复，发送后客户端会在同一会话里看到这条消息"></textarea>
                 <div class="composer-actions">
+                  <button id="adminAssistantClaimBtn" type="button" class="secondary">认领会话</button>
                   <button id="adminAssistantReplyBtn" type="button" class="primary">发送人工回复</button>
                   <button id="adminAssistantResolveBtn" type="button" class="ghost">发送并结案</button>
                 </div>

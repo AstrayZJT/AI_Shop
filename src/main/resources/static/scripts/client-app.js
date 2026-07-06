@@ -29,9 +29,14 @@ const ASSISTANT_SERVICE_STATUS_LABELS = {
   ESCALATED: "人工跟进中",
   RESOLVED: "人工已回复",
 };
+const CLIENT_AUTH_SCOPE = "customer";
 
 function clientById(id) {
   return document.getElementById(id);
+}
+
+function clientAuthUrl(url) {
+  return `${url}${url.includes("?") ? "&" : "?"}scope=${CLIENT_AUTH_SCOPE}`;
 }
 
 async function clientFetchJson(url, options = {}) {
@@ -426,7 +431,8 @@ function renderSessions() {
     <button type="button" class="session-pill ${clientState.sessionId === session.id ? "active" : ""}" data-session-id="${session.id}">
       <strong>${escapeHtml(session.title)}</strong>
       <div class="inline-meta">${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</div>
-      <div class="inline-meta">${escapeHtml(session.lastIntent || "chat")}</div>
+      <div class="inline-meta">${escapeHtml(session.lastIntent || "chat")}${session.supportAgentDisplayName ? ` · ${escapeHtml(session.supportAgentDisplayName)}` : ""}</div>
+      ${Number(session.unreadSupportCount || 0) > 0 ? `<div class="inline-meta">人工新消息 ${session.unreadSupportCount} 条</div>` : ""}
     </button>
   `).join("");
   host.querySelectorAll(".session-pill").forEach((button) => {
@@ -476,13 +482,18 @@ function renderAssistantMeta(payload = clientState.assistantContext) {
       : "当前没有待确认下单草稿";
   let statusHint = "你可以继续让 AI 查询商品、订单、物流和售后规则。";
   if (session?.serviceStatus === "ESCALATED") {
-    statusHint = "当前会话已经进入人工跟进队列，管理员在后台回复后会直接回流到这里。";
+    statusHint = session?.supportAgentDisplayName
+      ? `当前会话已经由 ${session.supportAgentDisplayName} 跟进，管理员回复后会直接回流到这里。`
+      : "当前会话已经进入人工跟进队列，管理员在后台回复后会直接回流到这里。";
   } else if (session?.serviceStatus === "RESOLVED") {
-    statusHint = "人工客服已经回复，你可以继续补充问题，系统会重新回到正常 AI 会话。";
+    statusHint = Number(session?.unreadSupportCount || 0) > 0
+      ? `人工客服已经回复，当前有 ${session.unreadSupportCount} 条新消息。`
+      : "人工客服已经回复，你可以继续补充问题，系统会重新回到正常 AI 会话。";
   }
   host.innerHTML = `
     <div><strong>会话状态：</strong>${escapeHtml(status)}</div>
     <div><strong>当前意图：</strong>${escapeHtml(intent)}</div>
+    <div><strong>人工跟进：</strong>${escapeHtml(session?.supportAgentDisplayName || "暂未分配人工客服")}</div>
     <div><strong>草稿状态：</strong>${escapeHtml(draftText)}</div>
     <div><strong>提示：</strong>${escapeHtml(statusHint)}</div>
     <div><strong>知识命中：</strong>${escapeHtml(sourceText)}</div>
@@ -530,7 +541,7 @@ function renderAssistantDraft() {
 }
 
 async function loadMe() {
-  clientState.user = await clientFetchJson("/api/auth/me");
+  clientState.user = await clientFetchJson(clientAuthUrl("/api/auth/me"));
   if (clientState.user) {
     setStoreStatus(`已登录：${clientState.user.displayName || clientState.user.username} · ${clientState.user.role}`);
     clientById("shippingAddress").value = clientState.user.shippingAddress || "";
@@ -610,6 +621,12 @@ async function loadSessions() {
 
 async function loadMessages(sessionId) {
   const messages = await clientFetchJson(`/api/assistant/sessions/${sessionId}/messages`);
+  const currentSession = currentAssistantSession();
+  if (currentSession && currentSession.id === sessionId && Number(currentSession.unreadSupportCount || 0) > 0) {
+    currentSession.unreadSupportCount = 0;
+    renderSessions();
+    renderAssistantMeta(clientState.assistantContext);
+  }
   renderAssistantMessages(messages || []);
 }
 
@@ -662,7 +679,7 @@ async function login() {
   if (!username || !password) {
     throw new Error("请先输入用户名和密码");
   }
-  await clientFetchJson("/api/auth/login", {
+  await clientFetchJson(clientAuthUrl("/api/auth/login"), {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
@@ -687,7 +704,7 @@ async function registerUser() {
 }
 
 async function logout() {
-  await clientFetchJson("/api/auth/logout", { method: "POST" });
+  await clientFetchJson(clientAuthUrl("/api/auth/logout"), { method: "POST" });
   clientState.user = null;
   clientState.sessionId = null;
   clientState.threadId = null;

@@ -3,9 +3,14 @@ const state = {
   sessionId: null,
   threadId: null,
 };
+const AUTH_SCOPE = "customer";
 
 function byId(id) {
   return document.getElementById(id);
+}
+
+function authUrl(url) {
+  return `${url}${url.includes("?") ? "&" : "?"}scope=${AUTH_SCOPE}`;
 }
 
 function setStatus(text) {
@@ -48,7 +53,7 @@ async function fetchJson(url, options = {}) {
 
 async function loadMe() {
   try {
-    state.user = await fetchJson("/api/auth/me");
+    state.user = await fetchJson(authUrl("/api/auth/me"));
     setStatus(state.user ? `Signed in as ${state.user.username}` : "Not signed in");
     await loadSessions();
   } catch (error) {
@@ -117,7 +122,7 @@ async function login() {
     return;
   }
 
-  await fetchJson("/api/auth/login", {
+  await fetchJson(authUrl("/api/auth/login"), {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
@@ -129,7 +134,7 @@ async function login() {
 }
 
 async function logout() {
-  await fetchJson("/api/auth/logout", { method: "POST" });
+  await fetchJson(authUrl("/api/auth/logout"), { method: "POST" });
   state.user = null;
   state.sessionId = null;
   state.threadId = null;

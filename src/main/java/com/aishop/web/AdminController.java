@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.aishop.dto.AdminDtos.AdminOrderResponse;
 import com.aishop.dto.AdminDtos.AdminAssistantDraftResponse;
 import com.aishop.dto.AdminDtos.AdminAssistantMessageResponse;
+import com.aishop.dto.AdminDtos.AdminAssistantAssignRequest;
 import com.aishop.dto.AdminDtos.AdminAssistantReplyRequest;
 import com.aishop.dto.AdminDtos.AdminAssistantSessionResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
@@ -136,12 +137,26 @@ public class AdminController {
         return adminService.assistantMessages(id);
     }
 
+    @PostMapping("/api/admin/assistant/sessions/{id}/claim")
+    public AdminAssistantSessionResponse claimAssistantSession(HttpSession session, @PathVariable Long id) {
+        var admin = authService.requireAdmin(session);
+        return adminService.claimAssistantSession(id, admin);
+    }
+
+    @PostMapping("/api/admin/assistant/sessions/{id}/assign")
+    public AdminAssistantSessionResponse assignAssistantSession(HttpSession session,
+                                                                @PathVariable Long id,
+                                                                @RequestBody AdminAssistantAssignRequest request) {
+        var admin = authService.requireAdmin(session);
+        return adminService.assignAssistantSession(id, admin, request.adminUsername());
+    }
+
     @PostMapping("/api/admin/assistant/sessions/{id}/reply")
     public AdminAssistantMessageResponse assistantReply(HttpSession session,
                                                         @PathVariable Long id,
                                                         @RequestBody AdminAssistantReplyRequest request) {
-        authService.requireAdmin(session);
-        return adminService.replyAssistantSession(id, request.content(), request.resolve());
+        var admin = authService.requireAdmin(session);
+        return adminService.replyAssistantSession(id, admin, request.content(), request.resolve());
     }
 
     @GetMapping("/api/admin/assistant/drafts")

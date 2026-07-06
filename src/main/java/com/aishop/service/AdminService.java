@@ -2,6 +2,7 @@ package com.aishop.service;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -186,14 +187,19 @@ public class AdminService {
 
     @Transactional(readOnly = true)
     public List<AdminAssistantSessionResponse> listAssistantSessions() {
-        return assistantSessionRepository.findTop20ByOrderByCreatedAtDesc().stream()
+        return assistantSessionRepository.findAll().stream()
+                .sorted(assistantSessionComparator())
+                .limit(20)
                 .map(this::toAdminAssistantSessionResponse)
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public List<AdminAssistantSessionResponse> listEscalatedAssistantSessions() {
-        return assistantSessionRepository.findTop20ByServiceStatusOrderByCreatedAtDesc(SERVICE_STATUS_ESCALATED).stream()
+        return assistantSessionRepository.findAll().stream()
+                .filter(session -> SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus())))
+                .sorted(escalationQueueComparator())
+                .limit(20)
                 .map(this::toAdminAssistantSessionResponse)
                 .toList();
     }
@@ -210,6 +216,44 @@ public class AdminService {
                 .toList();
     }
 
+    @Transactional
+    public AdminAssistantSessionResponse claimAssistantSession(Long sessionId, AppUser admin) {
+        AssistantSession session = assistantSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("AI 会话不存在"));
+        if (!SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
+            throw new IllegalArgumentException("当前会话未处于人工跟进状态");
+        }
+
+        assignSession(session, admin, Instant.now());
+        assistantSessionRepository.save(session);
+        return toAdminAssistantSessionResponse(session);
+    }
+
+    @Transactional
+    public AdminAssistantSessionResponse assignAssistantSession(Long sessionId, AppUser actingAdmin, String adminUsername) {
+        AssistantSession session = assistantSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("AI 会话不存在"));
+        if (!SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
+            throw new IllegalArgumentException("只有人工跟进中的会话支持转交");
+        }
+        String normalizedUsername = blankToNull(adminUsername);
+        if (normalizedUsername == null) {
+            throw new IllegalArgumentException("请选择要转交的客服账号");
+        }
+
+        AppUser targetAdmin = userRepository.findByUsername(normalizedUsername)
+                .filter(user -> user.getRole() == com.aishop.domain.UserRole.ADMIN)
+                .orElseThrow(() -> new IllegalArgumentException("目标客服账号不存在或不是管理员"));
+
+        assignSession(session, targetAdmin, Instant.now());
+        session.setSummary(appendAssistantSummary(
+                session.getSummary(),
+                "系统",
+                "由 %s 转交给 %s".formatted(actingAdmin.getDisplayName(), targetAdmin.getDisplayName())));
+        assistantSessionRepository.save(session);
+        return toAdminAssistantSessionResponse(session);
+    }
+
     @Transactional(readOnly = true)
     public List<AdminAssistantDraftResponse> listPendingAssistantDrafts() {
         return pendingOrderDraftRepository.findTop20ByStatusOrderByCreatedAtDesc("PENDING_CONFIRMATION").stream()
@@ -218,22 +262,33 @@ public class AdminService {
     }
 
     @Transactional
-    public AdminAssistantMessageResponse replyAssistantSession(Long sessionId, String content, Boolean resolve) {
+    public AdminAssistantMessageResponse replyAssistantSession(Long sessionId, AppUser admin, String content, Boolean resolve) {
         AssistantSession session = assistantSessionRepository.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("AI 会话不存在"));
         String normalizedContent = blankToNull(content);
         if (normalizedContent == null) {
             throw new IllegalArgumentException("人工回复内容不能为空");
         }
+        Instant now = Instant.now();
+
+        assignSession(session, admin, now);
 
         AssistantMessage message = new AssistantMessage();
         message.setSession(session);
         message.setRole("support");
         message.setContent(normalizedContent);
         AssistantMessage saved = assistantMessageRepository.save(message);
+        Instant messageTime = saved.getCreatedAt() == null ? now : saved.getCreatedAt();
 
         session.setServiceStatus(Boolean.TRUE.equals(resolve) ? SERVICE_STATUS_RESOLVED : SERVICE_STATUS_ESCALATED);
         session.setLastIntent("handoff");
+        session.setLastSupportMessageAt(messageTime);
+        session.setSupportUnreadCount(0L);
+        session.setCustomerUnreadCount(safeCount(session.getCustomerUnreadCount()) + 1L);
+        if (session.getFirstSupportReplyAt() == null) {
+            session.setFirstSupportReplyAt(messageTime);
+        }
+        session.setResolvedAt(Boolean.TRUE.equals(resolve) ? messageTime : null);
         session.setSummary(appendAssistantSummary(session.getSummary(), "人工客服", normalizedContent));
         assistantSessionRepository.save(session);
 
@@ -320,6 +375,7 @@ public class AdminService {
 
     private AdminAssistantSessionResponse toAdminAssistantSessionResponse(AssistantSession session) {
         AppUser user = session.getUser();
+        AppUser assignedAdmin = session.getAssignedAdmin();
         return new AdminAssistantSessionResponse(
                 session.getId(),
                 "assistant-" + session.getId(),
@@ -330,6 +386,15 @@ public class AdminService {
                 user.getUsername(),
                 user.getDisplayName(),
                 assistantMessageRepository.countBySession(session),
+                assignedAdmin == null ? null : assignedAdmin.getUsername(),
+                assignedAdmin == null ? null : assignedAdmin.getDisplayName(),
+                session.getAssignedAt(),
+                session.getFirstSupportReplyAt(),
+                session.getResolvedAt(),
+                session.getLastCustomerMessageAt(),
+                session.getLastSupportMessageAt(),
+                safeCount(session.getSupportUnreadCount()),
+                safeCount(session.getCustomerUnreadCount()),
                 session.getCreatedAt());
     }
 
@@ -398,6 +463,18 @@ public class AdminService {
         return current + " | " + snippet;
     }
 
+    private void assignSession(AssistantSession session, AppUser admin, Instant assignTime) {
+        if (admin == null || admin.getRole() != com.aishop.domain.UserRole.ADMIN) {
+            throw new SecurityException("需要管理员权限");
+        }
+        boolean changedOwner = session.getAssignedAdmin() == null
+                || !session.getAssignedAdmin().getId().equals(admin.getId());
+        session.setAssignedAdmin(admin);
+        if (changedOwner || session.getAssignedAt() == null) {
+            session.setAssignedAt(assignTime);
+        }
+    }
+
     private DraftPayload parseDraft(String draftJson) {
         var matcher = DRAFT_PATTERN.matcher(draftJson == null ? "" : draftJson);
         if (!matcher.find()) {
@@ -448,6 +525,47 @@ public class AdminService {
         for (var item : orderItemRepository.findByOrder(order)) {
             productService.increaseStockBySku(item.getProductSku(), item.getQuantity());
         }
+    }
+
+    private Comparator<AssistantSession> assistantSessionComparator() {
+        return Comparator
+                .comparing((AssistantSession session) -> !SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus())))
+                .thenComparing((AssistantSession session) -> safeCount(session.getSupportUnreadCount()), Comparator.reverseOrder())
+                .thenComparing((AssistantSession session) -> safeCount(session.getCustomerUnreadCount()), Comparator.reverseOrder())
+                .thenComparing(this::latestAssistantActivityAt, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(AssistantSession::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder()));
+    }
+
+    private Comparator<AssistantSession> escalationQueueComparator() {
+        return Comparator
+                .comparing((AssistantSession session) -> session.getAssignedAdmin() != null)
+                .thenComparing((AssistantSession session) -> safeCount(session.getSupportUnreadCount()), Comparator.reverseOrder())
+                .thenComparing(this::latestCustomerWaitingAt, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(AssistantSession::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder()));
+    }
+
+    private Instant latestAssistantActivityAt(AssistantSession session) {
+        if (session.getUpdatedAt() != null) {
+            return session.getUpdatedAt();
+        }
+        if (session.getLastCustomerMessageAt() != null) {
+            return session.getLastCustomerMessageAt();
+        }
+        if (session.getLastSupportMessageAt() != null) {
+            return session.getLastSupportMessageAt();
+        }
+        return session.getCreatedAt();
+    }
+
+    private Instant latestCustomerWaitingAt(AssistantSession session) {
+        if (session.getLastCustomerMessageAt() != null) {
+            return session.getLastCustomerMessageAt();
+        }
+        return session.getCreatedAt();
+    }
+
+    private long safeCount(Long count) {
+        return count == null ? 0L : count;
     }
 
     private record DraftPayload(Long productId,
