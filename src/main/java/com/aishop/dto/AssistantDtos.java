@@ -24,5 +24,24 @@ public final class AssistantDtos {
                                         String serviceStatus,
                                         long unreadSupportCount,
                                         String supportAgentDisplayName) {}
+    public record RuntimeHealthResponse(boolean aiEnabled,
+                                        String mode,
+                                        String provider,
+                                        boolean requestReady,
+                                        boolean apiKeyConfigured,
+                                        String baseUrl,
+                                        String chatModelName,
+                                        String embeddingModelName,
+                                        String chatModelClass,
+                                        String embeddingModelClass,
+                                        String vectorStoreType,
+                                        boolean vectorStorePersistent,
+                                        String vectorTable,
+                                        String knowledgePath,
+                                        int ragTopK,
+                                        long knowledgeDocumentCount,
+                                        long knowledgeChunkCount,
+                                        long indexedSegmentCount,
+                                        List<String> warnings) {}
     public record EscalateSessionRequest(String note) {}
 }

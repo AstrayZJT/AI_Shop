@@ -54,6 +54,7 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
         }
 
         ensurePromotionSchema();
+        ensureProductReviewSchema();
 
         int checkedTables = 0;
         for (String tableName : AUDITED_TABLES) {
@@ -153,6 +154,30 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
         jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE");
         jdbcTemplate.update("UPDATE promotion_campaigns SET active = COALESCE(active, TRUE) WHERE active IS NULL");
         jdbcTemplate.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_promotion_campaigns_code ON promotion_campaigns (code)");
+    }
+
+    private void ensureProductReviewSchema() {
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS product_reviews (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT,
+                    user_id BIGINT,
+                    order_id BIGINT,
+                    order_item_id BIGINT,
+                    rating INTEGER,
+                    content VARCHAR(1000)
+                )
+                """);
+        jdbcTemplate.execute("ALTER TABLE product_reviews ADD COLUMN IF NOT EXISTS product_id BIGINT");
+        jdbcTemplate.execute("ALTER TABLE product_reviews ADD COLUMN IF NOT EXISTS user_id BIGINT");
+        jdbcTemplate.execute("ALTER TABLE product_reviews ADD COLUMN IF NOT EXISTS order_id BIGINT");
+        jdbcTemplate.execute("ALTER TABLE product_reviews ADD COLUMN IF NOT EXISTS order_item_id BIGINT");
+        jdbcTemplate.execute("ALTER TABLE product_reviews ADD COLUMN IF NOT EXISTS rating INTEGER");
+        jdbcTemplate.execute("ALTER TABLE product_reviews ADD COLUMN IF NOT EXISTS content VARCHAR(1000)");
+        jdbcTemplate.update("UPDATE product_reviews SET rating = COALESCE(rating, 5) WHERE rating IS NULL");
+        jdbcTemplate.update("UPDATE product_reviews SET content = COALESCE(NULLIF(TRIM(content), ''), '系统为历史评价补齐的占位内容') WHERE content IS NULL OR TRIM(content) = ''");
+        jdbcTemplate.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_product_reviews_order_item_user ON product_reviews (order_item_id, user_id)");
+        jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS ix_product_reviews_product_id ON product_reviews (product_id)");
     }
 
     private void ensureAssistantSessionServiceStatus() {

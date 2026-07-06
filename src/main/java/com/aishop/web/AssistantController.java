@@ -13,8 +13,10 @@ import com.aishop.dto.AssistantDtos.ChatResponse;
 import com.aishop.dto.AssistantDtos.CreateSessionResponse;
 import com.aishop.dto.AssistantDtos.EscalateSessionRequest;
 import com.aishop.dto.AssistantDtos.MessageResponse;
+import com.aishop.dto.AssistantDtos.RuntimeHealthResponse;
 import com.aishop.dto.AssistantDtos.SessionResponse;
 import com.aishop.domain.AssistantSession;
+import com.aishop.service.AssistantRuntimeStatusService;
 import com.aishop.service.AssistantService;
 import com.aishop.service.AuthService;
 
@@ -25,10 +27,19 @@ public class AssistantController {
 
     private final AuthService authService;
     private final AssistantService assistantService;
+    private final AssistantRuntimeStatusService assistantRuntimeStatusService;
 
-    public AssistantController(AuthService authService, AssistantService assistantService) {
+    public AssistantController(AuthService authService,
+                               AssistantService assistantService,
+                               AssistantRuntimeStatusService assistantRuntimeStatusService) {
         this.authService = authService;
         this.assistantService = assistantService;
+        this.assistantRuntimeStatusService = assistantRuntimeStatusService;
+    }
+
+    @GetMapping("/api/assistant/health")
+    public RuntimeHealthResponse health() {
+        return assistantRuntimeStatusService.runtimeHealth();
     }
 
     @PostMapping("/api/assistant/chat")

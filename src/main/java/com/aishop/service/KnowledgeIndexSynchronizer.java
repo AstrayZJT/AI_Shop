@@ -43,10 +43,15 @@ public class KnowledgeIndexSynchronizer implements CommandLineRunner {
     @Override
     @Transactional
     public void run(String... args) throws Exception {
+        reindexAll();
+    }
+
+    @Transactional
+    public ReindexStats reindexAll() throws Exception {
         List<KnowledgeChunk> chunks = chunkRepository.findAll();
         if (chunks.isEmpty()) {
             log.info("knowledge index sync skipped: no knowledge chunks found");
-            return;
+            return new ReindexStats(0, 0);
         }
         int expectedDimension = embeddingModel.dimension();
 
@@ -70,6 +75,7 @@ public class KnowledgeIndexSynchronizer implements CommandLineRunner {
 
         log.info("knowledge index sync completed: indexedChunks={}, regeneratedEmbeddings={}",
                 chunks.size(), updatedChunks.size());
+        return new ReindexStats(chunks.size(), updatedChunks.size());
     }
 
     public static String chunkUuid(Long chunkId) {
@@ -105,5 +111,8 @@ public class KnowledgeIndexSynchronizer implements CommandLineRunner {
             log.warn("failed to parse cached embedding for knowledge chunk {}", chunk.getId(), ex);
             return null;
         }
+    }
+
+    public record ReindexStats(int indexedChunks, int regeneratedEmbeddings) {
     }
 }

@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.aishop.domain.AppUser;
 import com.aishop.domain.AssistantMessage;
 import com.aishop.domain.AssistantSession;
+import com.aishop.domain.KnowledgeChunk;
 import com.aishop.domain.KnowledgeDocument;
 import com.aishop.domain.OrderStatus;
 import com.aishop.domain.PendingOrderDraft;
@@ -24,6 +25,8 @@ import com.aishop.dto.AdminDtos.AdminOrderItemResponse;
 import com.aishop.dto.AdminDtos.AdminOrderResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
 import com.aishop.dto.AdminDtos.DashboardMetricResponse;
+import com.aishop.dto.AdminDtos.KnowledgeDocumentChunkResponse;
+import com.aishop.dto.AdminDtos.KnowledgeDocumentDetailResponse;
 import com.aishop.dto.AdminDtos.KnowledgeDocumentResponse;
 import com.aishop.dto.AdminDtos.KnowledgeSearchResponse;
 import com.aishop.dto.AdminDtos.ProductUpsertRequest;
@@ -31,6 +34,7 @@ import com.aishop.dto.ProductDtos.ProductResponse;
 import com.aishop.repository.AppUserRepository;
 import com.aishop.repository.AssistantMessageRepository;
 import com.aishop.repository.AssistantSessionRepository;
+import com.aishop.repository.KnowledgeChunkRepository;
 import com.aishop.repository.KnowledgeDocumentRepository;
 import com.aishop.repository.OrderItemRepository;
 import com.aishop.repository.PendingOrderDraftRepository;
@@ -54,9 +58,11 @@ public class AdminService {
     private final ShopOrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final PendingOrderDraftRepository pendingOrderDraftRepository;
+    private final KnowledgeChunkRepository knowledgeChunkRepository;
     private final KnowledgeDocumentRepository knowledgeDocumentRepository;
     private final ProductService productService;
     private final KnowledgeService knowledgeService;
+    private final KnowledgeIndexSynchronizer knowledgeIndexSynchronizer;
     private final OrderTimelineService orderTimelineService;
     private final AfterSalesService afterSalesService;
 
@@ -67,9 +73,11 @@ public class AdminService {
                         ShopOrderRepository orderRepository,
                         OrderItemRepository orderItemRepository,
                         PendingOrderDraftRepository pendingOrderDraftRepository,
+                        KnowledgeChunkRepository knowledgeChunkRepository,
                         KnowledgeDocumentRepository knowledgeDocumentRepository,
                         ProductService productService,
                         KnowledgeService knowledgeService,
+                        KnowledgeIndexSynchronizer knowledgeIndexSynchronizer,
                         OrderTimelineService orderTimelineService,
                         AfterSalesService afterSalesService) {
         this.userRepository = userRepository;
@@ -79,9 +87,11 @@ public class AdminService {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.pendingOrderDraftRepository = pendingOrderDraftRepository;
+        this.knowledgeChunkRepository = knowledgeChunkRepository;
         this.knowledgeDocumentRepository = knowledgeDocumentRepository;
         this.productService = productService;
         this.knowledgeService = knowledgeService;
+        this.knowledgeIndexSynchronizer = knowledgeIndexSynchronizer;
         this.orderTimelineService = orderTimelineService;
         this.afterSalesService = afterSalesService;
     }
@@ -282,6 +292,41 @@ public class AdminService {
     @Transactional(readOnly = true)
     public KnowledgeSearchResponse searchKnowledge(String keyword) {
         return new KnowledgeSearchResponse(keyword, knowledgeService.search(keyword));
+    }
+
+    @Transactional(readOnly = true)
+    public KnowledgeDocumentDetailResponse knowledgeDocumentDetail(Long id) {
+        KnowledgeDocument document = knowledgeDocumentRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("知识文档不存在"));
+        List<KnowledgeChunk> chunks = knowledgeChunkRepository.findByDocumentOrderByIdAsc(document);
+        String content = document.getContent() == null ? "" : document.getContent();
+        long indexedChunkCount = chunks.stream()
+                .filter(this::chunkIndexed)
+                .count();
+        return new KnowledgeDocumentDetailResponse(
+                document.getId(),
+                document.getTitle(),
+                document.getDocType(),
+                content,
+                document.getCreatedAt(),
+                content.length(),
+                chunks.size(),
+                indexedChunkCount,
+                chunks.stream()
+                        .map(chunk -> new KnowledgeDocumentChunkResponse(
+                                chunk.getId(),
+                                trim(chunk.getChunkText(), 180),
+                                chunkIndexed(chunk)))
+                        .toList());
+    }
+
+    @Transactional
+    public void reindexKnowledge() {
+        try {
+            knowledgeIndexSynchronizer.reindexAll();
+        } catch (Exception ex) {
+            throw new IllegalStateException("知识索引重建失败: " + ex.getMessage(), ex);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -711,6 +756,13 @@ public class AdminService {
             return "";
         }
         return value.length() <= maxLen ? value : value.substring(0, maxLen);
+    }
+
+    private boolean chunkIndexed(KnowledgeChunk chunk) {
+        String embeddingJson = chunk.getEmbeddingJson();
+        return embeddingJson != null
+                && !embeddingJson.isBlank()
+                && !"[]".equals(embeddingJson.trim());
     }
 
     private void restoreStockForOrder(ShopOrder order) {

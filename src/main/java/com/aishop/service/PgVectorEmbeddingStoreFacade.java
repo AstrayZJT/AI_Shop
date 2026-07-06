@@ -61,6 +61,20 @@ public class PgVectorEmbeddingStoreFacade implements EmbeddingStoreFacade {
     }
 
     @Override
+    public long segmentCount() {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("select count(*) from " + tableName);
+             var resultSet = statement.executeQuery()) {
+            if (resultSet.next()) {
+                return resultSet.getLong(1);
+            }
+            return 0L;
+        } catch (Exception ex) {
+            throw new RuntimeException("Failed to count pgvector segments", ex);
+        }
+    }
+
+    @Override
     public void removeAll() {
         store.removeAll();
     }

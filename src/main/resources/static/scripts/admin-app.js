@@ -4,12 +4,17 @@ const adminState = {
   products: [],
   promotions: [],
   promotionLoadError: "",
+  aiRuntime: null,
+  aiRuntimeError: "",
   orders: [],
   reviews: [],
   reviewLoadError: "",
   knowledgeDocs: [],
   knowledgeMatches: [],
   knowledgeSearchKeyword: "",
+  selectedKnowledgeDocumentId: null,
+  selectedKnowledgeDocument: null,
+  knowledgeDetailError: "",
   users: [],
   assistantSessions: [],
   assistantMessages: [],
@@ -145,6 +150,36 @@ function afterSalesStatusLabel(status) {
 
 function assistantServiceStatusLabel(status) {
   return ASSISTANT_SERVICE_STATUS_LABELS[status] || ASSISTANT_SERVICE_STATUS_LABELS.ACTIVE;
+}
+
+function adminAiModeLabel(runtime) {
+  return runtime?.mode === "REMOTE_MODEL" ? "真实模型" : "本地联调";
+}
+
+function adminAiProviderLabel(runtime) {
+  if (!runtime?.provider) {
+    return "未知提供方";
+  }
+  if (runtime.provider === "DASHSCOPE_COMPATIBLE") {
+    return "DashScope 兼容接口";
+  }
+  if (runtime.provider === "OPENAI") {
+    return "OpenAI";
+  }
+  if (runtime.provider === "LOCAL_RULES") {
+    return "本地兜底逻辑";
+  }
+  return "OpenAI 兼容接口";
+}
+
+function adminVectorStoreLabel(runtime) {
+  if (!runtime) {
+    return "未知";
+  }
+  if (runtime.vectorStoreType === "PGVECTOR") {
+    return `pgvector / ${runtime.vectorTable || "knowledge_embeddings"}`;
+  }
+  return "内存向量库";
 }
 
 function assistantServiceTagClass(status) {
@@ -676,6 +711,65 @@ function renderDashboard() {
     metricCard("低库存商品", lowStockProducts().length),
     metricCard("知识文档", adminState.dashboard.knowledgeDocumentCount),
   ].join("");
+}
+
+function renderAdminAiRuntime() {
+  const host = adminById("adminAiRuntimePanel");
+  if (!host) {
+    return;
+  }
+  if (adminState.aiRuntimeError) {
+    host.innerHTML = `<div class="empty-state">AI 运行态读取失败：${escapeHtml(adminState.aiRuntimeError)}</div>`;
+    return;
+  }
+  const runtime = adminState.aiRuntime;
+  if (!runtime) {
+    host.innerHTML = `<div class="empty-state">正在读取 AI 运行态...</div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="runtime-head">
+      <div>
+        <strong>AI 与向量库运行态</strong>
+        <div class="panel-hint">直接显示当前进程是否接入真实模型、向量库是否落到 pgvector，以及知识索引规模。</div>
+      </div>
+      <div class="runtime-tags">
+        <span class="tag ${runtime.requestReady ? "success" : "warning"}">${escapeHtml(adminAiModeLabel(runtime))}</span>
+        <span class="tag ${runtime.vectorStorePersistent ? "success" : "info"}">${escapeHtml(adminVectorStoreLabel(runtime))}</span>
+      </div>
+    </div>
+    <div class="assistant-summary-grid runtime-metric-grid">
+      <div class="assistant-summary-item">
+        <span class="assistant-summary-label">聊天模型</span>
+        <strong>${escapeHtml(runtime.chatModelName || runtime.chatModelClass || "-")}</strong>
+      </div>
+      <div class="assistant-summary-item">
+        <span class="assistant-summary-label">Embedding</span>
+        <strong>${escapeHtml(runtime.embeddingModelName || runtime.embeddingModelClass || "-")}</strong>
+      </div>
+      <div class="assistant-summary-item">
+        <span class="assistant-summary-label">知识文档</span>
+        <strong>${escapeHtml(runtime.knowledgeDocumentCount)}</strong>
+      </div>
+      <div class="assistant-summary-item">
+        <span class="assistant-summary-label">切块 / 向量</span>
+        <strong>${escapeHtml(runtime.knowledgeChunkCount)} / ${escapeHtml(runtime.indexedSegmentCount)}</strong>
+      </div>
+    </div>
+    <div class="runtime-meta-grid">
+      <div class="panel-hint">提供方：${escapeHtml(adminAiProviderLabel(runtime))}</div>
+      <div class="panel-hint">Key 状态：${runtime.apiKeyConfigured ? "已注入当前进程" : "当前进程未读取到 Key"}</div>
+      <div class="panel-hint">知识原文目录：${escapeHtml(runtime.knowledgePath || "knowledge")}</div>
+      <div class="panel-hint">RAG TopK：${escapeHtml(runtime.ragTopK)}</div>
+      ${runtime.baseUrl ? `<div class="panel-hint">Base URL：${escapeHtml(runtime.baseUrl)}</div>` : ""}
+    </div>
+    ${(runtime.warnings || []).length ? `
+      <div class="runtime-warning-list">
+        ${(runtime.warnings || []).map((warning) => `<div class="panel-hint warning-text">${escapeHtml(warning)}</div>`).join("")}
+      </div>
+    ` : ""}
+  `;
 }
 
 function renderRefundQueue() {
@@ -1833,6 +1927,158 @@ function renderKnowledgeSearchResults() {
   `).join("");
 }
 
+function renderKnowledgeDocs() {
+  const host = adminById("knowledgeDocsList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看知识文档列表。</div>`;
+    return;
+  }
+  if (!adminState.knowledgeDocs.length) {
+    host.innerHTML = `<div class="empty-state">还没有知识文档，先导入一条售后、物流或商品规则。</div>`;
+    return;
+  }
+
+  host.innerHTML = adminState.knowledgeDocs.map((doc) => `
+    <div class="knowledge-item knowledge-doc-card ${adminState.selectedKnowledgeDocumentId === doc.id ? "active" : ""}">
+      <div class="row-top">
+        <strong>${escapeHtml(doc.title)}</strong>
+        <div class="tag">${escapeHtml(doc.docType)}</div>
+      </div>
+      <div class="inline-meta">导入时间 ${escapeHtml(formatDateTime(doc.createdAt))}</div>
+      <div class="inline-meta">${escapeHtml(doc.contentPreview)}</div>
+      <div class="row-bottom">
+        <button type="button" class="${adminState.selectedKnowledgeDocumentId === doc.id ? "secondary" : "ghost"} knowledge-doc-open-btn" data-doc-id="${doc.id}">
+          ${adminState.selectedKnowledgeDocumentId === doc.id ? "当前查看" : "查看原文"}
+        </button>
+      </div>
+    </div>
+  `).join("");
+
+  host.querySelectorAll(".knowledge-doc-open-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => openKnowledgeDocument(Number(button.dataset.docId), true)));
+  });
+}
+
+function renderKnowledgeDetail() {
+  const host = adminById("knowledgeDetailPanel");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">管理员登录后可查看知识原文、切块和索引状态。</div>`;
+    return;
+  }
+  if (adminState.knowledgeDetailError) {
+    host.innerHTML = `<div class="empty-state">${escapeHtml(adminState.knowledgeDetailError)}</div>`;
+    return;
+  }
+  const detail = adminState.selectedKnowledgeDocument;
+  if (!detail) {
+    host.innerHTML = `<div class="empty-state">选择一篇知识文档后，这里会显示原文、切块和索引状态。</div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="section-head compact">
+      <div>
+        <h3>${escapeHtml(detail.title)}</h3>
+        <p>${escapeHtml(detail.docType)} 路 原文 ${escapeHtml(detail.contentLength)} 字 路 切块 ${escapeHtml(detail.chunkCount)} 路 已索引 ${escapeHtml(detail.indexedChunkCount)}</p>
+      </div>
+      <button id="reindexKnowledgeInlineBtn" type="button" class="ghost">重建索引</button>
+    </div>
+    <div class="knowledge-content-block">${escapeHtml(detail.content)}</div>
+    <div class="knowledge-chunk-list">
+      ${(detail.chunks || []).map((chunk) => `
+        <div class="knowledge-chunk-card">
+          <div class="row-top">
+            <strong>片段 #${escapeHtml(chunk.id)}</strong>
+            <div class="tag ${chunk.indexed ? "success" : "warning"}">${chunk.indexed ? "已入索引" : "待补索引"}</div>
+          </div>
+          <div class="inline-meta">${escapeHtml(chunk.chunkPreview)}</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  adminById("reindexKnowledgeInlineBtn")?.addEventListener("click", () => runAdminAction(reindexKnowledge));
+}
+
+function renderKnowledgeSearchResults() {
+  const host = adminById("knowledgeSearchResults");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">管理员登录后可测试知识库的向量检索效果。</div>`;
+    return;
+  }
+  if (!adminState.knowledgeSearchKeyword) {
+    host.innerHTML = `<div class="empty-state">输入关键词，看看 AI 客服会命中哪些知识片段。</div>`;
+    return;
+  }
+  if (!adminState.knowledgeMatches.length) {
+    host.innerHTML = `<div class="empty-state">没有命中相关知识片段，换一个关键词再试试。</div>`;
+    return;
+  }
+
+  host.innerHTML = adminState.knowledgeMatches.map((match) => `
+    <div class="knowledge-item knowledge-match">
+      <div class="row-top">
+        <strong>${escapeHtml(match.title)}</strong>
+        <div class="tag">命中片段</div>
+      </div>
+      <div class="inline-meta">${escapeHtml(match.chunkText)}</div>
+      ${match.documentId ? `
+        <div class="row-bottom">
+          <button type="button" class="ghost knowledge-match-open-btn" data-doc-id="${match.documentId}">打开原文</button>
+        </div>
+      ` : ""}
+    </div>
+  `).join("");
+
+  host.querySelectorAll(".knowledge-match-open-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => openKnowledgeDocument(Number(button.dataset.docId), true)));
+  });
+}
+
+async function openKnowledgeDocument(docId, shouldScroll = false) {
+  if (!docId) {
+    adminState.selectedKnowledgeDocumentId = null;
+    adminState.selectedKnowledgeDocument = null;
+    adminState.knowledgeDetailError = "";
+    renderKnowledgeDocs();
+    renderKnowledgeDetail();
+    return;
+  }
+  adminState.selectedKnowledgeDocumentId = docId;
+  try {
+    adminState.selectedKnowledgeDocument = await adminFetchJson(`/api/admin/knowledge/documents/${docId}`);
+    adminState.knowledgeDetailError = "";
+  } catch (error) {
+    adminState.selectedKnowledgeDocument = null;
+    adminState.knowledgeDetailError = error?.message || "知识文档详情暂时不可用";
+  }
+  renderKnowledgeDocs();
+  renderKnowledgeDetail();
+  if (shouldScroll) {
+    adminById("knowledgeDetailPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+async function reindexKnowledge() {
+  await adminFetchJson("/api/admin/knowledge/reindex", {
+    method: "POST",
+  });
+  await loadAdminData();
+  if (adminState.knowledgeSearchKeyword) {
+    await searchKnowledge();
+  }
+  setAdminStatus("知识索引已重建，运行态与文档详情已刷新。");
+}
+
 function renderUsers() {
   const host = adminById("adminUsersList");
   if (!host) {
@@ -1950,6 +2196,9 @@ function clearAdminDataState() {
   adminState.knowledgeDocs = [];
   adminState.knowledgeMatches = [];
   adminState.knowledgeSearchKeyword = "";
+  adminState.selectedKnowledgeDocumentId = null;
+  adminState.selectedKnowledgeDocument = null;
+  adminState.knowledgeDetailError = "";
   adminState.users = [];
   adminState.assistantSessions = [];
   adminState.assistantMessages = [];
@@ -1966,6 +2215,7 @@ async function loadAdminData() {
   if (!adminState.user || adminState.user.role !== "ADMIN") {
     clearAdminDataState();
     renderDashboard();
+    renderAdminAiRuntime();
     renderOperationsWorkbench();
     renderAfterSalesWorkbench();
     renderProducts();
@@ -1975,6 +2225,7 @@ async function loadAdminData() {
     renderReviews();
     renderAssistantOperations();
     renderKnowledgeDocs();
+    renderKnowledgeDetail();
     renderKnowledgeSearchResults();
     renderUsers();
     return;
@@ -1995,10 +2246,33 @@ async function loadAdminData() {
   adminState.products = products || [];
   adminState.orders = orders || [];
   adminState.knowledgeDocs = knowledgeDocs || [];
+  const knowledgeDocStillVisible = adminState.knowledgeDocs.some((doc) => doc.id === adminState.selectedKnowledgeDocumentId);
+  if (!knowledgeDocStillVisible) {
+    adminState.selectedKnowledgeDocumentId = adminState.knowledgeDocs[0]?.id || null;
+  }
+  if (adminState.selectedKnowledgeDocumentId) {
+    try {
+      adminState.selectedKnowledgeDocument = await adminFetchJson(`/api/admin/knowledge/documents/${adminState.selectedKnowledgeDocumentId}`);
+      adminState.knowledgeDetailError = "";
+    } catch (error) {
+      adminState.selectedKnowledgeDocument = null;
+      adminState.knowledgeDetailError = error?.message || "知识文档详情暂时不可用";
+    }
+  } else {
+    adminState.selectedKnowledgeDocument = null;
+    adminState.knowledgeDetailError = "";
+  }
   adminState.users = users || [];
   adminState.assistantSessions = assistantSessions || [];
   adminState.assistantEscalations = assistantEscalations || [];
   adminState.assistantDrafts = assistantDrafts || [];
+  try {
+    adminState.aiRuntime = await adminFetchJson("/api/assistant/health");
+    adminState.aiRuntimeError = "";
+  } catch (error) {
+    adminState.aiRuntime = null;
+    adminState.aiRuntimeError = error?.message || "AI 运行态接口暂时不可用";
+  }
   try {
     adminState.promotions = await adminFetchJson("/api/admin/promotions");
     adminState.promotionLoadError = "";
@@ -2026,6 +2300,7 @@ async function loadAdminData() {
   }
 
   renderDashboard();
+  renderAdminAiRuntime();
   renderOperationsWorkbench();
   renderAfterSalesWorkbench();
   renderProducts();
@@ -2035,6 +2310,7 @@ async function loadAdminData() {
   renderReviews();
   renderAssistantOperations();
   renderKnowledgeDocs();
+  renderKnowledgeDetail();
   renderKnowledgeSearchResults();
   renderUsers();
 }
@@ -2366,6 +2642,8 @@ async function saveKnowledge(event) {
   adminById("knowledgeTitle").value = "";
   adminById("knowledgeType").value = "";
   adminById("knowledgeContent").value = "";
+  adminState.selectedKnowledgeDocumentId = null;
+  adminState.selectedKnowledgeDocument = null;
   await loadAdminData();
   if (adminById("knowledgeSearchInput").value.trim()) {
     await searchKnowledge();
@@ -2394,6 +2672,14 @@ async function bootstrapAdmin() {
   } catch (error) {
     adminState.user = null;
   }
+  try {
+    adminState.aiRuntime = await adminFetchJson("/api/assistant/health");
+    adminState.aiRuntimeError = "";
+  } catch (error) {
+    adminState.aiRuntime = null;
+    adminState.aiRuntimeError = error?.message || "AI 运行态接口暂时不可用";
+  }
+  renderAdminAiRuntime();
   await loadAdminData();
 }
 
@@ -2437,6 +2723,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   adminById("knowledgeForm").addEventListener("submit", (event) => runAdminAction(() => saveKnowledge(event)));
   adminById("knowledgeSearchBtn").addEventListener("click", () => runAdminAction(searchKnowledge));
+  adminById("reindexKnowledgeBtn").addEventListener("click", () => runAdminAction(reindexKnowledge));
   adminById("knowledgeSearchInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();

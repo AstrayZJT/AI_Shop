@@ -42,6 +42,11 @@ public class InMemoryEmbeddingStoreFacade implements EmbeddingStoreFacade {
     }
 
     @Override
+    public long segmentCount() {
+        return entries.size();
+    }
+
+    @Override
     public void removeAll() {
         entries.clear();
     }

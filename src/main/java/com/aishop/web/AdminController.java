@@ -20,6 +20,7 @@ import com.aishop.dto.AdminDtos.AdminAssistantSessionResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
 import com.aishop.dto.AdminDtos.DashboardMetricResponse;
 import com.aishop.dto.AdminDtos.KnowledgeDocumentResponse;
+import com.aishop.dto.AdminDtos.KnowledgeDocumentDetailResponse;
 import com.aishop.dto.AdminDtos.KnowledgeSearchResponse;
 import com.aishop.dto.AdminDtos.OrderLogisticsUpdateRequest;
 import com.aishop.dto.AdminDtos.ProductUpsertRequest;
@@ -158,10 +159,22 @@ public class AdminController {
         return adminService.listKnowledgeDocuments();
     }
 
+    @GetMapping("/api/admin/knowledge/documents/{id}")
+    public KnowledgeDocumentDetailResponse knowledgeDocumentDetail(HttpSession session, @PathVariable Long id) {
+        authService.requireAdmin(session);
+        return adminService.knowledgeDocumentDetail(id);
+    }
+
     @GetMapping("/api/admin/knowledge/search")
     public KnowledgeSearchResponse searchKnowledge(HttpSession session, @RequestParam String keyword) {
         authService.requireAdmin(session);
         return adminService.searchKnowledge(keyword);
+    }
+
+    @PostMapping("/api/admin/knowledge/reindex")
+    public void reindexKnowledge(HttpSession session) {
+        authService.requireAdmin(session);
+        adminService.reindexKnowledge();
     }
 
     @PostMapping("/api/admin/knowledge/import")

@@ -72,6 +72,20 @@ public final class AdminDtos {
                                             String contentPreview,
                                             Instant createdAt) {}
 
+    public record KnowledgeDocumentChunkResponse(Long id,
+                                                 String chunkPreview,
+                                                 boolean indexed) {}
+
+    public record KnowledgeDocumentDetailResponse(Long id,
+                                                  String title,
+                                                  String docType,
+                                                  String content,
+                                                  Instant createdAt,
+                                                  int contentLength,
+                                                  long chunkCount,
+                                                  long indexedChunkCount,
+                                                  List<KnowledgeDocumentChunkResponse> chunks) {}
+
     public record KnowledgeSearchResponse(String keyword,
                                           List<SearchResponse> matches) {}
 

@@ -42,6 +42,7 @@
           <button id="refreshDashboardBtn" type="button" class="ghost">刷新看板</button>
         </div>
         <div id="metricGrid" class="metric-grid"></div>
+        <div id="adminAiRuntimePanel" class="runtime-panel admin-runtime-panel"></div>
       </div>
     </section>
 
@@ -309,9 +310,13 @@
               <input id="knowledgeSearchInput" type="text" placeholder="输入退款、物流、保修、通勤等关键词">
               <button id="knowledgeSearchBtn" type="button" class="secondary">检索知识</button>
             </div>
+            <div class="form-actions">
+              <button id="reindexKnowledgeBtn" type="button" class="ghost">重建全部索引</button>
+            </div>
             <div id="knowledgeSearchResults" class="stack-list"></div>
           </div>
           <div id="knowledgeDocsList" class="stack-list"></div>
+          <div id="knowledgeDetailPanel" class="knowledge-detail-panel"></div>
         </section>
       </div>
     </section>

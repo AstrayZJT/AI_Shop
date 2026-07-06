@@ -8,6 +8,8 @@ const clientState = {
   promotions: [],
   promotionLoadError: "",
   selectedPromotionCode: "",
+  aiRuntime: null,
+  aiRuntimeError: "",
   sessions: [],
   sessionId: null,
   threadId: null,
@@ -183,6 +185,36 @@ function currency(value) {
 
 function normalizePromotionCode(value) {
   return String(value ?? "").trim().toUpperCase();
+}
+
+function aiModeLabel(runtime) {
+  return runtime?.mode === "REMOTE_MODEL" ? "真实模型" : "本地联调";
+}
+
+function aiProviderLabel(runtime) {
+  if (!runtime?.provider) {
+    return "未知提供方";
+  }
+  if (runtime.provider === "DASHSCOPE_COMPATIBLE") {
+    return "DashScope 兼容接口";
+  }
+  if (runtime.provider === "OPENAI") {
+    return "OpenAI";
+  }
+  if (runtime.provider === "LOCAL_RULES") {
+    return "本地兜底逻辑";
+  }
+  return "OpenAI 兼容接口";
+}
+
+function aiVectorStoreLabel(runtime) {
+  if (!runtime) {
+    return "未知";
+  }
+  if (runtime.vectorStoreType === "PGVECTOR") {
+    return `pgvector / ${runtime.vectorTable || "knowledge_embeddings"}`;
+  }
+  return "内存向量库";
 }
 
 function cartSubtotal() {
@@ -838,6 +870,17 @@ function maybeLoadSelectedProductReviews() {
   void loadProductReviews(product.id);
 }
 
+async function loadAssistantRuntime() {
+  try {
+    clientState.aiRuntime = await clientFetchJson("/api/assistant/health");
+    clientState.aiRuntimeError = "";
+  } catch (error) {
+    clientState.aiRuntime = null;
+    clientState.aiRuntimeError = error?.message || "AI 运行态接口暂时不可用";
+  }
+  renderAssistantRuntime();
+}
+
 function renderCatalogExperience() {
   renderCategories();
   renderRecommendationScenes();
@@ -982,6 +1025,64 @@ function renderPromotions() {
       renderPromotions();
     });
   });
+}
+
+function renderAssistantRuntime() {
+  const host = clientById("assistantRuntimePanel");
+  if (!host) {
+    return;
+  }
+  if (clientState.aiRuntimeError) {
+    host.innerHTML = `<div class="empty-state">AI 运行态读取失败：${escapeHtml(clientState.aiRuntimeError)}</div>`;
+    return;
+  }
+  const runtime = clientState.aiRuntime;
+  if (!runtime) {
+    host.innerHTML = `<div class="empty-state">正在读取 AI 运行态...</div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="runtime-head">
+      <div>
+        <strong>当前 AI 运行态</strong>
+        <div class="panel-hint">这里直接展示当前进程实际加载到的模型、向量库和知识索引状态。</div>
+      </div>
+      <div class="runtime-tags">
+        <span class="tag ${runtime.requestReady ? "success" : "warning"}">${escapeHtml(aiModeLabel(runtime))}</span>
+        <span class="tag ${runtime.vectorStorePersistent ? "success" : "info"}">${escapeHtml(aiVectorStoreLabel(runtime))}</span>
+      </div>
+    </div>
+    <div class="assistant-summary-grid runtime-metric-grid">
+      <div class="assistant-summary-item">
+        <span class="assistant-summary-label">聊天模型</span>
+        <strong>${escapeHtml(runtime.chatModelName || runtime.chatModelClass || "-")}</strong>
+      </div>
+      <div class="assistant-summary-item">
+        <span class="assistant-summary-label">Embedding</span>
+        <strong>${escapeHtml(runtime.embeddingModelName || runtime.embeddingModelClass || "-")}</strong>
+      </div>
+      <div class="assistant-summary-item">
+        <span class="assistant-summary-label">知识文档</span>
+        <strong>${escapeHtml(runtime.knowledgeDocumentCount)}</strong>
+      </div>
+      <div class="assistant-summary-item">
+        <span class="assistant-summary-label">向量分片</span>
+        <strong>${escapeHtml(runtime.indexedSegmentCount)}</strong>
+      </div>
+    </div>
+    <div class="runtime-meta-grid">
+      <div class="panel-hint">提供方：${escapeHtml(aiProviderLabel(runtime))}</div>
+      <div class="panel-hint">Key 状态：${runtime.apiKeyConfigured ? "已注入当前进程" : "当前进程未读取到 Key"}</div>
+      <div class="panel-hint">知识原文目录：${escapeHtml(runtime.knowledgePath || "knowledge")}</div>
+      <div class="panel-hint">RAG TopK：${escapeHtml(runtime.ragTopK)}</div>
+    </div>
+    ${(runtime.warnings || []).length ? `
+      <div class="runtime-warning-list">
+        ${(runtime.warnings || []).map((warning) => `<div class="panel-hint warning-text">${escapeHtml(warning)}</div>`).join("")}
+      </div>
+    ` : ""}
+  `;
 }
 
 function renderProfile() {
@@ -1914,9 +2015,10 @@ async function submitProductReview(orderId, itemId) {
 }
 
 async function bootstrapClient() {
+  renderAssistantRuntime();
   await loadMe();
   await loadCatalog();
-  await Promise.all([loadCart(), loadOrders(), loadSessions()]);
+  await Promise.all([loadCart(), loadOrders(), loadSessions(), loadAssistantRuntime()]);
   if (window.location.hash === "#assistant") {
     clientById("assistant")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }

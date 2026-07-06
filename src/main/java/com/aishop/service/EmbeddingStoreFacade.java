@@ -19,5 +19,9 @@ public interface EmbeddingStoreFacade {
 
     List<TextSegment> allSegments();
 
+    default long segmentCount() {
+        return allSegments().size();
+    }
+
     void removeAll();
 }

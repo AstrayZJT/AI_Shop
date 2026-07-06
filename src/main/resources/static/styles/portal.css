@@ -746,6 +746,44 @@ textarea {
   margin-bottom: 14px;
 }
 
+.runtime-panel {
+  margin-top: 18px;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.admin-runtime-panel {
+  margin-top: 16px;
+}
+
+.runtime-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+  flex-wrap: wrap;
+}
+
+.runtime-tags,
+.runtime-meta-grid,
+.runtime-warning-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.runtime-metric-grid {
+  margin-bottom: 0;
+}
+
+.warning-text {
+  color: var(--accent);
+}
+
 .chat-feed {
   min-height: 260px;
   max-height: 420px;
@@ -976,6 +1014,38 @@ textarea {
 
 .knowledge-match {
   background: rgba(15, 118, 110, 0.06);
+}
+
+.knowledge-doc-card.active {
+  border-color: rgba(15, 118, 110, 0.28);
+  box-shadow: 0 14px 28px rgba(15, 118, 110, 0.1);
+}
+
+.knowledge-detail-panel,
+.knowledge-chunk-list {
+  display: grid;
+  gap: 12px;
+}
+
+.knowledge-content-block,
+.knowledge-chunk-card {
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.knowledge-content-block {
+  white-space: pre-wrap;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.knowledge-chunk-card {
+  display: grid;
+  gap: 8px;
 }
 
 .metric-grid {

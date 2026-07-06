@@ -129,7 +129,7 @@ public class KnowledgeService {
         }
 
         return orderedChunks.values().stream()
-                .map(chunk -> new SearchResponse(chunk.getId(), chunk.getDocument().getTitle(), chunk.getChunkText()))
+                .map(chunk -> new SearchResponse(chunk.getId(), chunk.getDocument().getId(), chunk.getDocument().getTitle(), chunk.getChunkText()))
                 .limit(targetSize)
                 .toList();
     }
