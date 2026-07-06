@@ -438,6 +438,11 @@ textarea {
   color: var(--primary-strong);
 }
 
+.tag.info {
+  background: rgba(15, 76, 129, 0.1);
+  color: var(--info);
+}
+
 .status-chip {
   display: inline-flex;
   align-items: center;

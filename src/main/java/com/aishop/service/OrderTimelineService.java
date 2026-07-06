@@ -60,6 +60,22 @@ public class OrderTimelineService {
                 "订单已创建",
                 buildCreatedDetail(order),
                 "系统");
+        if (order.getStatus() == OrderStatus.PENDING_PAYMENT) {
+            persist(order,
+                    safeInstant(order.getUpdatedAt(), order.getCreatedAt()),
+                    "ORDER_PAYMENT_PENDING",
+                    "订单等待支付",
+                    "订单已创建，等待用户完成支付。",
+                    "系统");
+        }
+        if (order.getPaidAt() != null) {
+            persist(order,
+                    order.getPaidAt(),
+                    "ORDER_PAID",
+                    "订单支付成功",
+                    buildPaidDetail(order),
+                    "系统");
+        }
         if (order.getStatus() == OrderStatus.PROCESSING) {
             persist(order,
                     safeInstant(order.getUpdatedAt(), order.getCreatedAt()),
@@ -157,6 +173,12 @@ public class OrderTimelineService {
         return suffix == null
                 ? "物流公司 %s，运单号 %s。".formatted(carrier, trackingNo)
                 : "物流公司 %s，运单号 %s。%s".formatted(carrier, trackingNo, suffix);
+    }
+
+    private String buildPaidDetail(ShopOrder order) {
+        return "支付方式 %s，支付流水 %s。".formatted(
+                blankToDefault(order.getPaymentMethod(), "模拟支付"),
+                blankToDefault(order.getPaymentReference(), "待补充"));
     }
 
     private Instant safeInstant(Instant primary, Instant... fallbacks) {

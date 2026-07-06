@@ -40,6 +40,14 @@ public class ShopOrder extends BaseEntity {
 
     private Instant shippedAt;
 
+    @Column(length = 64)
+    private String paymentMethod;
+
+    @Column(length = 64)
+    private String paymentReference;
+
+    private Instant paidAt;
+
     @Column(length = 512)
     private String riskNote;
 
@@ -105,6 +113,30 @@ public class ShopOrder extends BaseEntity {
 
     public void setShippedAt(Instant shippedAt) {
         this.shippedAt = shippedAt;
+    }
+
+    public String getPaymentMethod() {
+        return paymentMethod;
+    }
+
+    public void setPaymentMethod(String paymentMethod) {
+        this.paymentMethod = paymentMethod;
+    }
+
+    public String getPaymentReference() {
+        return paymentReference;
+    }
+
+    public void setPaymentReference(String paymentReference) {
+        this.paymentReference = paymentReference;
+    }
+
+    public Instant getPaidAt() {
+        return paidAt;
+    }
+
+    public void setPaidAt(Instant paidAt) {
+        this.paidAt = paidAt;
     }
 
     public String getRiskNote() {

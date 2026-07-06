@@ -19,6 +19,7 @@ const clientState = {
 const ORDER_STATUS_LABELS = {
   DRAFT: "草稿",
   PENDING_CONFIRMATION: "待确认",
+  PENDING_PAYMENT: "待支付",
   CONFIRMED: "待发货",
   PROCESSING: "处理中",
   SHIPPED: "已发货",
@@ -49,6 +50,7 @@ const RECOMMENDATION_SCENES = [
   { key: "MOBILE", label: "手机拍照", keywords: ["手机", "拍照", "影像", "旗舰", "续航"] },
   { key: "ENTERTAINMENT", label: "影音娱乐", keywords: ["娱乐", "游戏", "音箱", "耳机", "沉浸", "屏幕"] },
 ];
+const PAYMENT_METHOD_OPTIONS = ["模拟支付", "支付宝", "微信支付", "银行卡"];
 const CLIENT_AUTH_SCOPE = "customer";
 
 function clientById(id) {
@@ -674,6 +676,7 @@ function renderOrders() {
         <div class="inline-meta">状态编码 ${escapeHtml(order.status)}</div>
         <div class="inline-meta">金额 ${currency(order.totalAmount)}</div>
         <div class="inline-meta">地址 ${escapeHtml(order.shippingAddress || "待补充收货地址")}</div>
+        ${renderOrderPaymentMeta(order)}
         ${renderOrderShippingMeta(order)}
         ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
       </div>
@@ -699,6 +702,9 @@ function renderOrders() {
 
 function renderOrderActionArea(order) {
   const buttons = [];
+  if (canPayOrder(order.status)) {
+    buttons.push(`<button type="button" class="primary order-action-btn" data-order-id="${order.id}" data-action="pay">模拟支付</button>`);
+  }
   if (canCancelOrder(order.status)) {
     buttons.push(`<button type="button" class="ghost order-action-btn" data-order-id="${order.id}" data-action="cancel">取消订单</button>`);
   }
@@ -712,9 +718,14 @@ function renderOrderActionArea(order) {
     buttons.push(`<button type="button" class="ghost order-action-btn" data-order-id="${order.id}" data-action="refund">申请退款</button>`);
   }
   buttons.push(`<button type="button" class="ghost order-ai-btn" data-order-no="${escapeHtml(order.orderNo)}">问 AI</button>`);
-  const needsNote = canCancelOrder(order.status) || canRequestRefund(order.status);
+  const needsNote = canPayOrder(order.status) || canCancelOrder(order.status) || canRequestRefund(order.status);
   return `
     <div class="order-action-block">
+      ${canPayOrder(order.status)
+        ? `<select class="order-payment-method-select" data-order-id="${order.id}">
+            ${PAYMENT_METHOD_OPTIONS.map((method) => `<option value="${escapeHtml(method)}" ${method === (order.paymentMethod || "模拟支付") ? "selected" : ""}>${escapeHtml(method)}</option>`).join("")}
+          </select>`
+        : ""}
       ${canUpdateShippingAddress(order.status)
         ? `<input class="order-address-input" data-order-id="${order.id}" placeholder="发货前可修改当前订单收货地址" value="${escapeHtml(order.shippingAddress || "")}">`
         : ""}
@@ -729,6 +740,12 @@ function renderOrderActionArea(order) {
 }
 
 function orderActionPlaceholder(status) {
+  if (canPayOrder(status) && canCancelOrder(status)) {
+    return "备注，例如支付说明、取消原因或地址调整提醒";
+  }
+  if (canPayOrder(status)) {
+    return "支付备注，例如模拟付款说明";
+  }
   if (canCancelOrder(status)) {
     return "取消原因，例如重复下单、地址填写有误";
   }
@@ -740,6 +757,9 @@ function orderActionPlaceholder(status) {
 
 function orderActionHint(order) {
   const status = typeof order === "string" ? order : order.status;
+  if (canPayOrder(status)) {
+    return "当前订单还没完成支付。你可以先选择支付方式完成模拟支付，也可以趁发货前继续改地址或取消订单。";
+  }
   if (canCancelOrder(status)) {
     return "待发货和处理中订单可以直接在线取消，也支持先改当前订单地址。";
   }
@@ -765,7 +785,11 @@ function orderActionHint(order) {
 }
 
 function canCancelOrder(status) {
-  return status === "CONFIRMED" || status === "PROCESSING";
+  return status === "PENDING_PAYMENT" || status === "CONFIRMED" || status === "PROCESSING";
+}
+
+function canPayOrder(status) {
+  return status === "PENDING_PAYMENT";
 }
 
 function canConfirmReceipt(status) {
@@ -777,7 +801,23 @@ function canRequestRefund(status) {
 }
 
 function canUpdateShippingAddress(status) {
-  return status === "CONFIRMED" || status === "PROCESSING";
+  return status === "PENDING_PAYMENT" || status === "CONFIRMED" || status === "PROCESSING";
+}
+
+function renderOrderPaymentMeta(order) {
+  const lines = [];
+  if (order.paymentMethod) {
+    lines.push(`<div class="inline-meta">支付方式 ${escapeHtml(order.paymentMethod)}</div>`);
+  }
+  if (order.paymentReference) {
+    lines.push(`<div class="inline-meta">支付流水 ${escapeHtml(order.paymentReference)}</div>`);
+  }
+  if (order.paidAt) {
+    lines.push(`<div class="inline-meta">支付时间 ${escapeHtml(new Date(order.paidAt).toLocaleString("zh-CN"))}</div>`);
+  } else if (order.status === "PENDING_PAYMENT") {
+    lines.push(`<div class="inline-meta">支付状态 待完成模拟支付</div>`);
+  }
+  return lines.join("");
 }
 
 function renderOrderShippingMeta(order) {
@@ -1006,7 +1046,7 @@ function renderAssistantDraft() {
         <div class="inline-meta">单价 ${currency(draft.unitPrice)}</div>
         <div class="inline-meta">合计 ${currency(draft.totalAmount)}</div>
       </div>
-      <div class="panel-hint">${escapeHtml(draft.note || "确认后会创建正式订单，并进入待发货流程。")}</div>
+      <div class="panel-hint">${escapeHtml(draft.note || "确认后会创建正式订单，并先进入待支付流程。")}</div>
       <div class="order-actions">
         <button id="confirmDraftBtn" type="button" class="primary">确认下单</button>
         <button id="cancelDraftBtn" type="button" class="ghost">取消草稿</button>
@@ -1231,7 +1271,7 @@ async function checkout() {
       shippingAddress: clientById("shippingAddress").value.trim(),
     }),
   });
-  setStoreStatus("订单已创建，正在刷新购物车与订单列表");
+  setStoreStatus("订单已创建，待支付订单会出现在订单列表里");
   await Promise.all([loadCart(), loadOrders(), loadCatalog()]);
 }
 
@@ -1297,7 +1337,7 @@ async function confirmAssistantDraft() {
   });
   clientState.pendingDraft = null;
   renderAssistantDraft();
-  setStoreStatus(`AI 草稿已转成正式订单：${createdOrder.orderNo}`);
+  setStoreStatus(`AI 草稿已转成正式订单：${createdOrder.orderNo}，请继续完成支付`);
   await Promise.all([loadCatalog(), loadOrders(), loadPendingDraft(), loadSessions()]);
 }
 
@@ -1349,6 +1389,10 @@ function readOrderAddress(orderId) {
   return document.querySelector(`.order-address-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
+function readPaymentMethod(orderId) {
+  return document.querySelector(`.order-payment-method-select[data-order-id="${orderId}"]`)?.value?.trim() || "模拟支付";
+}
+
 function readReturnCarrier(orderId) {
   return document.querySelector(`.return-carrier-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
@@ -1364,7 +1408,10 @@ function readReturnNote(orderId) {
 async function performOrderAction(orderId, action) {
   let url = "";
   let options = { method: "PATCH" };
-  if (action === "cancel") {
+  if (action === "pay") {
+    url = `/api/orders/${orderId}/pay`;
+    options.body = JSON.stringify({ paymentMethod: readPaymentMethod(orderId), note: readOrderNote(orderId) });
+  } else if (action === "cancel") {
     url = `/api/orders/${orderId}/cancel`;
     options.body = JSON.stringify({ note: readOrderNote(orderId) });
   } else if (action === "update-address") {
@@ -1381,6 +1428,8 @@ async function performOrderAction(orderId, action) {
   const updatedOrder = await clientFetchJson(url, options);
   if (action === "update-address") {
     setStoreStatus(`订单 ${updatedOrder.orderNo} 的收货地址已更新`);
+  } else if (action === "pay") {
+    setStoreStatus(`订单 ${updatedOrder.orderNo} 已完成支付，当前状态 ${statusLabel(updatedOrder.status)}`);
   } else {
     setStoreStatus(`订单 ${updatedOrder.orderNo} 已更新为 ${statusLabel(updatedOrder.status)}`);
   }

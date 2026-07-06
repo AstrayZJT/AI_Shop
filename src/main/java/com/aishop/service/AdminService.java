@@ -90,7 +90,7 @@ public class AdminService {
     public DashboardMetricResponse dashboard() {
         List<ShopOrder> orders = orderRepository.findAllByOrderByCreatedAtDesc();
         BigDecimal totalRevenue = orders.stream()
-                .filter(order -> order.getStatus() != OrderStatus.CANCELLED && order.getStatus() != OrderStatus.REFUNDED)
+                .filter(this::countsTowardRevenue)
                 .map(ShopOrder::getTotalAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         long pendingShipmentCount = orders.stream()
@@ -153,9 +153,21 @@ public class AdminService {
         if (nextStatus == OrderStatus.SHIPPED) {
             applyShipmentDetails(order, shippingCarrier, trackingNo);
         }
+        boolean manualPaymentApplied = nextStatus == OrderStatus.CONFIRMED && order.getPaidAt() == null;
+        if (manualPaymentApplied) {
+            applyManualPayment(order);
+        }
         order.setStatus(nextStatus);
         order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员更新状态为" + nextStatus.name(), note));
         orderRepository.save(order);
+        if (manualPaymentApplied) {
+            orderTimelineService.recordAdminEvent(
+                    order,
+                    "ORDER_PAID",
+                    "管理员确认收款",
+                    buildAdminPaymentDetail(order, note),
+                    actingAdmin == null ? null : actingAdmin.getDisplayName());
+        }
         orderTimelineService.recordAdminEvent(
                 order,
                 "ORDER_STATUS_CHANGED",
@@ -443,6 +455,9 @@ public class AdminService {
                 order.getShippingCarrier(),
                 order.getTrackingNo(),
                 order.getShippedAt(),
+                order.getPaymentMethod(),
+                order.getPaymentReference(),
+                order.getPaidAt(),
                 order.getRiskNote(),
                 order.getCreatedAt(),
                 items,
@@ -615,7 +630,7 @@ public class AdminService {
             case SHIPPED -> "订单已发货";
             case COMPLETED -> "订单已完成";
             case CANCELLED -> "订单已取消";
-            case CONFIRMED -> "订单回到待发货";
+            case CONFIRMED -> "订单进入待发货";
             case PENDING_CONFIRMATION -> "订单等待确认";
             case PENDING_PAYMENT -> "订单等待支付";
             case DRAFT -> "订单保存为草稿";
@@ -698,6 +713,31 @@ public class AdminService {
         for (var item : orderItemRepository.findByOrder(order)) {
             productService.increaseStockBySku(item.getProductSku(), item.getQuantity());
         }
+    }
+
+    private boolean countsTowardRevenue(ShopOrder order) {
+        return order.getStatus() != OrderStatus.CANCELLED
+                && order.getStatus() != OrderStatus.REFUNDED
+                && order.getStatus() != OrderStatus.PENDING_PAYMENT
+                && order.getStatus() != OrderStatus.PENDING_CONFIRMATION
+                && order.getStatus() != OrderStatus.DRAFT;
+    }
+
+    private void applyManualPayment(ShopOrder order) {
+        order.setPaidAt(Instant.now());
+        if (blankToNull(order.getPaymentMethod()) == null) {
+            order.setPaymentMethod("后台补记支付");
+        }
+        if (blankToNull(order.getPaymentReference()) == null) {
+            order.setPaymentReference("ADMIN-" + order.getOrderNo() + "-" + System.currentTimeMillis());
+        }
+    }
+
+    private String buildAdminPaymentDetail(ShopOrder order, String note) {
+        return "支付方式 %s，支付流水 %s。%s".formatted(
+                blankToDefault(order.getPaymentMethod(), "后台补记支付"),
+                blankToDefault(order.getPaymentReference(), "待补充"),
+                composeOptionalSuffix(note));
     }
 
     private Comparator<AssistantSession> assistantSessionComparator() {

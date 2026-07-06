@@ -22,6 +22,7 @@ const adminState = {
 const ADMIN_STATUS_LABELS = {
   DRAFT: "草稿",
   PENDING_CONFIRMATION: "待确认",
+  PENDING_PAYMENT: "待支付",
   CONFIRMED: "待发货",
   PROCESSING: "处理中",
   SHIPPED: "已发货",
@@ -41,6 +42,7 @@ const AFTER_SALES_STATUS_LABELS = {
 
 const ORDER_FILTERS = [
   { key: "ALL", label: "全部订单" },
+  { key: "PENDING_PAYMENT", label: "待支付" },
   { key: "REFUND_REQUESTED", label: "退款审核" },
   { key: "PENDING_SHIPMENT", label: "待发货" },
   { key: "SHIPPED", label: "已发货" },
@@ -384,6 +386,9 @@ function orderTagClass(status) {
   if (status === "REFUNDED" || status === "COMPLETED") {
     return "success";
   }
+  if (status === "PENDING_PAYMENT") {
+    return "info";
+  }
   if (status === "CONFIRMED" || status === "PROCESSING") {
     return "warning";
   }
@@ -488,6 +493,8 @@ function matchesOrderFilter(order) {
     order.shippingAddress,
     order.shippingCarrier,
     order.trackingNo,
+    order.paymentMethod,
+    order.paymentReference,
     order.riskNote,
     statusLabel(order.status),
     order.afterSales?.status,
@@ -1356,6 +1363,7 @@ function renderOrders() {
         <div class="inline-meta">创建时间 ${formatDateTime(order.createdAt)}</div>
         <div class="inline-meta">金额 ${money(order.totalAmount)} · 地址 ${escapeHtml(order.shippingAddress || "待补充地址")}</div>
       </div>
+      ${renderAdminOrderPaymentMeta(order)}
       ${renderAdminOrderShippingMeta(order)}
       ${order.afterSales ? `<div class="inline-meta">售后阶段 ${escapeHtml(afterSalesStatusLabel(order.afterSales.status))}</div>` : ""}
       ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
@@ -1434,8 +1442,10 @@ function renderAdminOrderControls(order) {
 function availableNextStatuses(status) {
   switch (status) {
     case "DRAFT":
-      return ["PENDING_CONFIRMATION", "CONFIRMED", "CANCELLED"];
+      return ["PENDING_CONFIRMATION", "PENDING_PAYMENT", "CONFIRMED", "CANCELLED"];
     case "PENDING_CONFIRMATION":
+      return ["PENDING_PAYMENT", "CONFIRMED", "CANCELLED"];
+    case "PENDING_PAYMENT":
       return ["CONFIRMED", "CANCELLED"];
     case "CONFIRMED":
       return ["PROCESSING", "SHIPPED", "CANCELLED"];
@@ -1492,6 +1502,22 @@ function renderAdminAfterSalesControls(order, notePlaceholder) {
 
 function shouldShowAdminShippingFields(order, nextStatuses) {
   return nextStatuses.includes("SHIPPED") || Boolean(order.shippingCarrier) || Boolean(order.trackingNo);
+}
+
+function renderAdminOrderPaymentMeta(order) {
+  const lines = [];
+  if (order.paymentMethod) {
+    lines.push(`<div class="inline-meta">支付方式 ${escapeHtml(order.paymentMethod)}</div>`);
+  }
+  if (order.paymentReference) {
+    lines.push(`<div class="inline-meta">支付流水 ${escapeHtml(order.paymentReference)}</div>`);
+  }
+  if (order.paidAt) {
+    lines.push(`<div class="inline-meta">支付时间 ${escapeHtml(formatDateTime(order.paidAt))}</div>`);
+  } else if (order.status === "PENDING_PAYMENT") {
+    lines.push(`<div class="inline-meta">支付状态 待用户完成支付；后台也可推进到待发货并补记收款</div>`);
+  }
+  return lines.join("");
 }
 
 function renderAdminOrderShippingMeta(order) {

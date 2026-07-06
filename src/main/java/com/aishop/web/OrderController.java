@@ -16,6 +16,7 @@ import com.aishop.dto.OrderDtos.OrderActionRequest;
 import com.aishop.dto.OrderDtos.OrderDraftRequest;
 import com.aishop.dto.OrderDtos.OrderDraftResponse;
 import com.aishop.dto.OrderDtos.OrderResponse;
+import com.aishop.dto.OrderDtos.PayOrderRequest;
 import com.aishop.dto.OrderDtos.ReturnShipmentRequest;
 import com.aishop.dto.OrderDtos.UpdateShippingAddressRequest;
 import com.aishop.service.AuthService;
@@ -69,6 +70,17 @@ public class OrderController {
                                 @PathVariable Long id,
                                 @RequestBody(required = false) OrderActionRequest request) {
         return orderService.cancelOrder(authService.requireUser(session), id, request == null ? null : request.note());
+    }
+
+    @PatchMapping("/api/orders/{id}/pay")
+    public OrderResponse pay(HttpSession session,
+                             @PathVariable Long id,
+                             @RequestBody(required = false) PayOrderRequest request) {
+        return orderService.payOrder(
+                authService.requireUser(session),
+                id,
+                request == null ? null : request.paymentMethod(),
+                request == null ? null : request.note());
     }
 
     @PatchMapping("/api/orders/{id}/confirm-receipt")

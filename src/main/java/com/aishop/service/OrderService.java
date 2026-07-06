@@ -27,6 +27,7 @@ import com.aishop.repository.ShopOrderRepository;
 @Service
 public class OrderService {
 
+    private static final String DEFAULT_PAYMENT_METHOD = "模拟支付";
     private static final Pattern DRAFT_PATTERN = Pattern.compile(
             "\\\"productId\\\":(?<productId>\\d+),\\\"productName\\\":\\\"(?<productName>.*?)\\\",\\\"quantity\\\":(?<quantity>\\d+),\\\"unitPrice\\\":(?<unitPrice>[-\\d.]+),\\\"totalAmount\\\":(?<totalAmount>[-\\d.]+),\\\"note\\\":\\\"(?<note>.*?)\\\""
     );
@@ -122,10 +123,10 @@ public class OrderService {
         var order = new ShopOrder();
         order.setOrderNo("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         order.setUser(user);
-        order.setStatus(OrderStatus.CONFIRMED);
+        order.setStatus(OrderStatus.PENDING_PAYMENT);
         order.setTotalAmount(payload.totalAmount());
         order.setShippingAddress(user.getShippingAddress() == null ? "待补充收货地址" : user.getShippingAddress());
-        order.setRiskNote("已由用户确认");
+        order.setRiskNote("已由用户确认 AI 下单草稿，等待支付");
         order = orderRepository.save(order);
 
         var item = new OrderItem();
@@ -143,7 +144,7 @@ public class OrderService {
                 order,
                 "ORDER_CREATED",
                 "用户确认 AI 下单草稿",
-                "已确认 %s x %s，并生成正式订单。".formatted(payload.productName(), payload.quantity()));
+                "已确认 %s x %s，并生成正式订单，当前待支付。".formatted(payload.productName(), payload.quantity()));
         return toResponse(order);
     }
 
@@ -231,7 +232,9 @@ public class OrderService {
     @Transactional
     public OrderResponse cancelOrder(AppUser user, Long id, String note, String actorLabel) {
         ShopOrder order = requireOwnedOrder(user, id);
-        if (!(order.getStatus() == OrderStatus.CONFIRMED || order.getStatus() == OrderStatus.PROCESSING)) {
+        if (!(order.getStatus() == OrderStatus.PENDING_PAYMENT
+                || order.getStatus() == OrderStatus.CONFIRMED
+                || order.getStatus() == OrderStatus.PROCESSING)) {
             throw new IllegalArgumentException("当前订单状态不支持取消");
         }
         restoreStockForOrder(order);
@@ -244,6 +247,34 @@ public class OrderService {
                 "ORDER_CANCELLED",
                 "订单已取消",
                 "订单已取消并回补库存。%s".formatted(composeOptionalSuffix(note)));
+        return toResponse(order);
+    }
+
+    @Transactional
+    public OrderResponse payOrder(AppUser user, Long id, String paymentMethod, String note) {
+        return payOrder(user, id, paymentMethod, note, "用户");
+    }
+
+    @Transactional
+    public OrderResponse payOrder(AppUser user, Long id, String paymentMethod, String note, String actorLabel) {
+        ShopOrder order = requireOwnedOrder(user, id);
+        if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
+            throw new IllegalArgumentException("当前订单不在待支付状态");
+        }
+        String normalizedPaymentMethod = normalizePaymentMethod(paymentMethod);
+        Instant paidAt = Instant.now();
+        order.setStatus(OrderStatus.CONFIRMED);
+        order.setPaymentMethod(normalizedPaymentMethod);
+        order.setPaymentReference(buildPaymentReference(order));
+        order.setPaidAt(paidAt);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "订单完成支付", note));
+        orderRepository.save(order);
+        recordTimelineByActor(
+                order,
+                actorLabel,
+                "ORDER_PAID",
+                "订单支付成功",
+                buildPaymentDetail(order, note));
         return toResponse(order);
     }
 
@@ -339,6 +370,9 @@ public class OrderService {
                 order.getShippingCarrier(),
                 order.getTrackingNo(),
                 order.getShippedAt(),
+                order.getPaymentMethod(),
+                order.getPaymentReference(),
+                order.getPaidAt(),
                 order.getRiskNote(),
                 items,
                 orderTimelineService.listOrderTimeline(order),
@@ -402,7 +436,27 @@ public class OrderService {
     }
 
     private boolean canUpdateShippingAddress(ShopOrder order) {
-        return order.getStatus() == OrderStatus.CONFIRMED || order.getStatus() == OrderStatus.PROCESSING;
+        return order.getStatus() == OrderStatus.PENDING_PAYMENT
+                || order.getStatus() == OrderStatus.CONFIRMED
+                || order.getStatus() == OrderStatus.PROCESSING;
+    }
+
+    private String normalizePaymentMethod(String paymentMethod) {
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            return DEFAULT_PAYMENT_METHOD;
+        }
+        return paymentMethod.trim();
+    }
+
+    private String buildPaymentReference(ShopOrder order) {
+        return "PAY-" + order.getOrderNo() + "-" + System.currentTimeMillis();
+    }
+
+    private String buildPaymentDetail(ShopOrder order, String note) {
+        return "支付方式 %s，支付流水 %s。%s".formatted(
+                normalizePaymentMethod(order.getPaymentMethod()),
+                order.getPaymentReference() == null ? "待补充" : order.getPaymentReference(),
+                composeOptionalSuffix(note));
     }
 
     private PendingOrderDraftResponse toDraftResponse(PendingOrderDraft draft) {

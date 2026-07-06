@@ -241,6 +241,9 @@ public class AssistantService {
         if (isKnowledgePolicyIntent(message) && !hasExplicitOrderReference(message) && !sources.isEmpty()) {
             return buildKnowledgeAnswer(sources);
         }
+        if (isPaymentIntent(message)) {
+            return buildPaymentGuide(focusOrder, recentOrders);
+        }
         if (isCancelIntent(message)) {
             return buildCancelGuide(focusOrder, recentOrders);
         }
@@ -294,7 +297,7 @@ public class AssistantService {
                 候选商品：%s
                 最近订单：%s
                 相关知识：%s
-                回答要求：优先结合商品、订单、售后规则和知识库，不要编造；如果用户在问订单，就先根据订单上下文回答；如果用户在问商品，就优先引用候选商品；如果用户在问地址、取消、退款、确认收货等动作，要结合当前订单状态给出明确步骤；回答要简洁、明确、像客服。
+                回答要求：优先结合商品、订单、支付、售后规则和知识库，不要编造；如果用户在问订单，就先根据订单上下文回答；如果用户在问商品，就优先引用候选商品；如果用户在问地址、支付、取消、退款、确认收货等动作，要结合当前订单状态给出明确步骤；回答要简洁、明确、像客服。
                 """.formatted(
                 user.getDisplayName(),
                 threadId,
@@ -326,6 +329,41 @@ public class AssistantService {
             }
             markSessionEscalated(session);
             return new ActionExecution("我已经帮你转接人工客服，管理员接下来可以在后台直接回复你。", "handoff");
+        }
+        if (isPaymentIntent(message) && wantsDirectExecution(message)) {
+            String paymentMethod = extractPaymentMethod(message);
+            if (exactOrder != null) {
+                if (!canPay(exactOrder)) {
+                    return new ActionExecution(
+                            "订单 %s 当前状态是 %s，暂时不能直接支付。通常只有待支付订单可以继续完成付款。"
+                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
+                            "order_action");
+                }
+                OrderResponse updated = orderService.payOrder(
+                        user,
+                        exactOrder.id(),
+                        paymentMethod,
+                        extractActionNote(message, "AI 客服代完成模拟支付"),
+                        "AI 客服");
+                return new ActionExecution(
+                        "我已经帮你完成模拟支付，订单 %s 当前状态是 %s，支付方式是 %s。"
+                                .formatted(updated.orderNo(), statusLabel(updated.status()), defaultText(updated.paymentMethod(), "模拟支付")),
+                        "order_action");
+            }
+            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canPay);
+            if (candidate == null) {
+                return new ActionExecution(buildActionOrderPrompt("完成支付", eligibleOrders(allOrders, this::canPay), "你当前没有待支付的订单。"), "order_action");
+            }
+            OrderResponse updated = orderService.payOrder(
+                    user,
+                    candidate.id(),
+                    paymentMethod,
+                    extractActionNote(message, "AI 客服代完成模拟支付"),
+                    "AI 客服");
+            return new ActionExecution(
+                    "我已经帮你完成模拟支付，订单 %s 当前状态是 %s，支付方式是 %s。"
+                            .formatted(updated.orderNo(), statusLabel(updated.status()), defaultText(updated.paymentMethod(), "模拟支付")),
+                    "order_action");
         }
         if (isCancelIntent(message) && wantsDirectExecution(message)) {
             if (exactOrder != null) {
@@ -526,7 +564,14 @@ public class AssistantService {
         if (text.contains("地址") && (text.contains("修改") || text.contains("更改") || text.contains("更新") || text.contains("改成") || text.contains("改为") || text.contains("收货"))) {
             return "profile";
         }
-        if (text.contains("下单") || text.contains("买") || text.contains("结算") || text.contains("订单") || text.contains("物流") || text.contains("发货")) {
+        if (text.contains("下单")
+                || text.contains("买")
+                || text.contains("结算")
+                || text.contains("订单")
+                || text.contains("物流")
+                || text.contains("发货")
+                || text.contains("支付")
+                || text.contains("付款")) {
             return "order";
         }
         if (text.contains("推荐") || text.contains("商品") || text.contains("手机") || text.contains("耳机") || text.contains("平板")) {
@@ -569,6 +614,15 @@ public class AssistantService {
     private boolean isCancelIntent(String message) {
         String text = message == null ? "" : message.toLowerCase();
         return text.contains("取消订单") || (text.contains("取消") && text.contains("订单"));
+    }
+
+    private boolean isPaymentIntent(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        return text.contains("支付")
+                || text.contains("付款")
+                || text.contains("付钱")
+                || text.contains("补款")
+                || text.contains("结清");
     }
 
     private boolean isConfirmReceiptIntent(String message) {
@@ -635,11 +689,27 @@ public class AssistantService {
                 || text.contains("申请一下")
                 || text.contains("取消一下")
                 || text.contains("确认一下")
+                || text.contains("支付一下")
+                || text.contains("付一下")
                 || text.contains("改成")
                 || text.contains("改为")
                 || text.contains("修改为")
                 || text.contains("修改成");
         return explicitAction && !asksHow && !asksInfo && !asksProgress;
+    }
+
+    private String extractPaymentMethod(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        if (text.contains("支付宝")) {
+            return "支付宝";
+        }
+        if (text.contains("微信")) {
+            return "微信支付";
+        }
+        if (text.contains("银行卡") || text.contains("信用卡")) {
+            return "银行卡";
+        }
+        return "模拟支付";
     }
 
     private int extractRequestedQuantity(String message) {
@@ -779,6 +849,30 @@ public class AssistantService {
                 .orElse(null);
     }
 
+    private String buildPaymentGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
+        if (orders.isEmpty()) {
+            return "你当前还没有订单，暂时没有需要支付的对象。先下单后，我可以继续帮你完成模拟支付。";
+        }
+        if (focusOrder != null && canPay(focusOrder)) {
+            return "订单 %s 当前状态是 %s，你可以在“我的订单”里选择支付方式后点击“模拟支付”，支付完成后会进入待发货。"
+                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
+        }
+        if (focusOrder != null && focusOrder.paidAt() != null) {
+            return "订单 %s 已经完成支付，当前状态是 %s，支付方式是 %s。"
+                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()), defaultText(focusOrder.paymentMethod(), "模拟支付"));
+        }
+        if (focusOrder != null) {
+            return "订单 %s 当前状态是 %s，暂时不需要再次支付。"
+                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
+        }
+        OrderResponse candidate = firstOrderWithStatus(orders, "PENDING_PAYMENT");
+        if (candidate != null) {
+            return "你最近待支付的订单是 %s，当前状态是 %s。到“我的订单”里点“模拟支付”就可以继续。"
+                    .formatted(candidate.orderNo(), statusLabel(candidate.status()));
+        }
+        return "你最近没有待支付的订单；如果你刚完成支付，我也可以继续帮你查后续发货进度。";
+    }
+
     private String buildCancelGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
         if (orders.isEmpty()) {
             return "你还没有可取消的订单。先下单后，我可以继续帮你判断是否能取消。";
@@ -788,15 +882,15 @@ public class AssistantService {
                     .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
         }
         if (focusOrder != null) {
-            return "订单 %s 当前状态是 %s，暂不支持在线取消。通常只有待发货或处理中订单可以取消。"
+            return "订单 %s 当前状态是 %s，暂不支持在线取消。通常只有待支付、待发货或处理中订单可以取消。"
                     .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
         }
-        OrderResponse candidate = firstOrderWithStatus(orders, "CONFIRMED", "PROCESSING");
+        OrderResponse candidate = firstOrderWithStatus(orders, "PENDING_PAYMENT", "CONFIRMED", "PROCESSING");
         if (candidate != null) {
             return "你最近可取消的订单是 %s，当前状态是 %s。到“我的订单”里点击“取消订单”就可以提交。"
                     .formatted(candidate.orderNo(), statusLabel(candidate.status()));
         }
-        return "你最近的订单里没有支持在线取消的订单。通常只有待发货或处理中订单可以取消。";
+        return "你最近的订单里没有支持在线取消的订单。通常只有待支付、待发货或处理中订单可以取消。";
     }
 
     private String buildConfirmReceiptGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
@@ -863,7 +957,7 @@ public class AssistantService {
             return currentAddress + "。你可以在客户端“我的资料”里直接修改，保存后购物车结算会优先带出新地址。";
         }
         if (canUpdateShippingAddress(focusOrder)) {
-            return currentAddress + "。订单 %s 当前状态是 %s，发货前还支持直接改这个订单的收货地址。你可以在“我的订单”里填写新地址后点击“修改地址”。"
+            return currentAddress + "。订单 %s 当前状态是 %s，支付完成前和发货前都还支持直接改这个订单的收货地址。你可以在“我的订单”里填写新地址后点击“修改地址”。"
                     .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
         }
         if ("SHIPPED".equals(focusOrder.status()) || "COMPLETED".equals(focusOrder.status()) || "REFUND_REQUESTED".equals(focusOrder.status())) {
@@ -914,6 +1008,10 @@ public class AssistantService {
         String carrier = order.shippingCarrier() == null || order.shippingCarrier().isBlank() ? "暂未分配物流公司" : order.shippingCarrier();
         String trackingNo = order.trackingNo() == null || order.trackingNo().isBlank() ? "暂未生成运单号" : order.trackingNo();
         var logisticsEvent = latestLogisticsEvent(order);
+        if ("PENDING_PAYMENT".equals(order.status())) {
+            return "订单 %s 当前状态是 %s，系统还在等待支付完成，所以还没有进入发货流程。"
+                    .formatted(order.orderNo(), statusLabel(order.status()));
+        }
         if ("CONFIRMED".equals(order.status()) || "PROCESSING".equals(order.status())) {
             return "订单 %s 当前状态是 %s，还没正式发货。发货后我可以继续帮你追踪物流节点。"
                     .formatted(order.orderNo(), statusLabel(order.status()));
@@ -965,7 +1063,13 @@ public class AssistantService {
     }
 
     private boolean canCancel(OrderResponse order) {
-        return "CONFIRMED".equals(order.status()) || "PROCESSING".equals(order.status());
+        return "PENDING_PAYMENT".equals(order.status())
+                || "CONFIRMED".equals(order.status())
+                || "PROCESSING".equals(order.status());
+    }
+
+    private boolean canPay(OrderResponse order) {
+        return "PENDING_PAYMENT".equals(order.status());
     }
 
     private boolean canConfirmReceipt(OrderResponse order) {
@@ -977,7 +1081,9 @@ public class AssistantService {
     }
 
     private boolean canUpdateShippingAddress(OrderResponse order) {
-        return "CONFIRMED".equals(order.status()) || "PROCESSING".equals(order.status());
+        return "PENDING_PAYMENT".equals(order.status())
+                || "CONFIRMED".equals(order.status())
+                || "PROCESSING".equals(order.status());
     }
 
     private String formatOrderDetail(OrderResponse order) {
@@ -998,6 +1104,15 @@ public class AssistantService {
         }
         if (order.shippedAt() != null) {
             builder.append(", 发货时间").append(order.shippedAt());
+        }
+        if (order.paymentMethod() != null && !order.paymentMethod().isBlank()) {
+            builder.append(", 支付方式").append(order.paymentMethod());
+        }
+        if (order.paymentReference() != null && !order.paymentReference().isBlank()) {
+            builder.append(", 支付流水").append(order.paymentReference());
+        }
+        if (order.paidAt() != null) {
+            builder.append(", 支付时间").append(order.paidAt());
         }
         if (logisticsEvent != null && logisticsEvent.detail() != null && !logisticsEvent.detail().isBlank()) {
             builder.append(", 最新物流").append(logisticsEvent.detail());
@@ -1033,6 +1148,7 @@ public class AssistantService {
     private String statusLabel(String status) {
         return switch (status) {
             case "PENDING_CONFIRMATION" -> "待确认";
+            case "PENDING_PAYMENT" -> "待支付";
             case "CONFIRMED" -> "待发货";
             case "PROCESSING" -> "处理中";
             case "SHIPPED" -> "已发货";
@@ -1058,7 +1174,8 @@ public class AssistantService {
                             ? ""
                             : ", " + order.timeline().get(order.timeline().size() - 1).title();
                     String afterSales = order.afterSales() == null ? "" : ", 售后" + afterSalesStatusLabel(order.afterSales().status());
-                    return "%s[%s, %s%s%s]".formatted(order.orderNo(), order.status(), order.totalAmount(), latest, afterSales);
+                    String payment = order.paidAt() == null ? "" : ", 已支付";
+                    return "%s[%s, %s%s%s%s]".formatted(order.orderNo(), statusLabel(order.status()), order.totalAmount(), payment, latest, afterSales);
                 })
                 .reduce((left, right) -> left + " | " + right)
                 .orElse("无");

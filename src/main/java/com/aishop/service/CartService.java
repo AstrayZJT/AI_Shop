@@ -137,12 +137,12 @@ public class CartService {
         ShopOrder order = new ShopOrder();
         order.setOrderNo("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         order.setUser(user);
-        order.setStatus(OrderStatus.CONFIRMED);
+        order.setStatus(OrderStatus.PENDING_PAYMENT);
         order.setTotalAmount(totalAmount);
         order.setShippingAddress((shippingAddress == null || shippingAddress.isBlank())
                 ? (user.getShippingAddress() == null ? "待补充收货地址" : user.getShippingAddress())
                 : shippingAddress);
-        order.setRiskNote("客户端购物车结算创建");
+        order.setRiskNote("客户端购物车结算创建，等待支付");
         order = orderRepository.save(order);
 
         for (CartItem item : items) {
@@ -164,7 +164,7 @@ public class CartService {
                 order,
                 "ORDER_CREATED",
                 "用户提交购物车订单",
-                "共 %s 件商品，结算金额 %s。".formatted(items.size(), totalAmount));
+                "共 %s 件商品，结算金额 %s，当前待支付。".formatted(items.size(), totalAmount));
         return orderService.toResponse(order);
     }
 

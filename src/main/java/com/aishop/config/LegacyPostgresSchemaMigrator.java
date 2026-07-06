@@ -100,6 +100,7 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
                 CHECK (status IN (
                     'DRAFT',
                     'PENDING_CONFIRMATION',
+                    'PENDING_PAYMENT',
                     'CONFIRMED',
                     'PROCESSING',
                     'SHIPPED',

@@ -284,8 +284,10 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 商品场景化推荐、推荐理由、选品决策区
 - 从商品卡片快速发起 AI 咨询、同类对比、下单草稿
 - 购物车增删改
-- 结算下单
+- 结算下单并生成待支付订单
+- 模拟支付，支持模拟支付、支付宝、微信支付、银行卡等支付方式标签
 - 订单列表
+- 支付方式、支付流水、支付时间展示
 - 订单履约时间线
 - 物流节点追踪
 - 发货前修改收货地址
@@ -299,6 +301,8 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - 仪表盘数据总览
 - 商品新增 / 编辑
+- 待支付订单查看
+- 后台补记支付并推进到待发货
 - 订单状态推进
 - 订单履约时间线
 - 追加物流节点并同步到客户端
@@ -328,6 +332,8 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 查询最近订单
 - 查询具体订单状态、物流、地址、最新履约进度
 - 读取最新物流节点并结合订单状态解释下一步
+- 查询待支付订单和支付状态
+- 直接代办模拟支付
 - 查询退款 / 售后进度与回寄物流状态
 - 生成下单草稿
 - 确认草稿生成正式订单
@@ -482,6 +488,7 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - `GET /api/orders/draft/current`
 - `POST /api/orders/confirm`
 - `DELETE /api/orders/draft`
+- `PATCH /api/orders/{id}/pay`
 - `PATCH /api/orders/{id}/cancel`
 - `PATCH /api/orders/{id}/confirm-receipt`
 - `PATCH /api/orders/{id}/refund`

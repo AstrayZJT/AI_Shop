@@ -34,6 +34,9 @@ public final class OrderDtos {
                                 String shippingCarrier,
                                 String trackingNo,
                                 Instant shippedAt,
+                                String paymentMethod,
+                                String paymentReference,
+                                Instant paidAt,
                                 String riskNote,
                                 List<OrderItemResponse> items,
                                 List<OrderTimelineResponse> timeline,
@@ -49,6 +52,7 @@ public final class OrderDtos {
                                             BigDecimal totalAmount,
                                             String note) {}
     public record OrderActionRequest(String note) {}
+    public record PayOrderRequest(String paymentMethod, String note) {}
     public record UpdateShippingAddressRequest(String shippingAddress, String note) {}
     public record ReturnShipmentRequest(String carrier, String trackingNo, String note) {}
 }
