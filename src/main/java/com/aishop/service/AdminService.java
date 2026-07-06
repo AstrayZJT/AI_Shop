@@ -69,6 +69,8 @@ public class AdminService {
     private final AfterSalesService afterSalesService;
     private final ProductFavoriteService favoriteService;
     private final ShippingAddressService shippingAddressService;
+    private final CustomerBehaviorService behaviorService;
+    private final OrderInvoiceService orderInvoiceService;
 
     public AdminService(AppUserRepository userRepository,
                         AssistantSessionRepository assistantSessionRepository,
@@ -85,7 +87,9 @@ public class AdminService {
                         OrderTimelineService orderTimelineService,
                         AfterSalesService afterSalesService,
                         ProductFavoriteService favoriteService,
-                        ShippingAddressService shippingAddressService) {
+                        ShippingAddressService shippingAddressService,
+                        CustomerBehaviorService behaviorService,
+                        OrderInvoiceService orderInvoiceService) {
         this.userRepository = userRepository;
         this.assistantSessionRepository = assistantSessionRepository;
         this.assistantMessageRepository = assistantMessageRepository;
@@ -102,6 +106,8 @@ public class AdminService {
         this.afterSalesService = afterSalesService;
         this.favoriteService = favoriteService;
         this.shippingAddressService = shippingAddressService;
+        this.behaviorService = behaviorService;
+        this.orderInvoiceService = orderInvoiceService;
     }
 
     @Transactional(readOnly = true)
@@ -290,6 +296,39 @@ public class AdminService {
         return toAdminOrderResponse(order);
     }
 
+    @Transactional
+    public AdminOrderResponse issueInvoice(Long id, AppUser actingAdmin, String invoiceNo, String note) {
+        ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        var invoice = orderInvoiceService.issueInvoice(order, invoiceNo, note);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员完成开票", invoice.invoiceNo()));
+        orderRepository.save(order);
+        orderTimelineService.recordAdminEvent(
+                order,
+                "INVOICE_ISSUED",
+                "发票已开具",
+                "发票号码 %s，接收邮箱 %s。%s".formatted(
+                        invoice.invoiceNo(),
+                        invoice.email(),
+                        composeOptionalSuffix(note)),
+                actingAdmin == null ? null : actingAdmin.getDisplayName());
+        return toAdminOrderResponse(order);
+    }
+
+    @Transactional
+    public AdminOrderResponse rejectInvoice(Long id, AppUser actingAdmin, String note) {
+        ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        var invoice = orderInvoiceService.rejectInvoice(order, note);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员驳回发票申请", invoice.adminReply()));
+        orderRepository.save(order);
+        orderTimelineService.recordAdminEvent(
+                order,
+                "INVOICE_REJECTED",
+                "发票申请已驳回",
+                "平台已驳回发票申请。%s".formatted(composeOptionalSuffix(note)),
+                actingAdmin == null ? null : actingAdmin.getDisplayName());
+        return toAdminOrderResponse(order);
+    }
+
     @Transactional(readOnly = true)
     public List<KnowledgeDocumentResponse> listKnowledgeDocuments() {
         return knowledgeDocumentRepository.findAllByOrderByCreatedAtDesc().stream()
@@ -375,6 +414,7 @@ public class AdminService {
                 .count();
         long addressCount = shippingAddressService.count(user);
         long favoriteCount = favoriteService.favoriteCount(user);
+        long behaviorEventCount = behaviorService.count(user);
 
         return new AdminCustomerInsightResponse(
                 toAdminUserResponse(user),
@@ -385,14 +425,16 @@ public class AdminService {
                 afterSalesCount,
                 addressCount,
                 favoriteCount,
+                behaviorEventCount,
                 activeSessionCount,
                 pendingDraftCount,
-                customerLifecycleStage(orders, sessions, pendingDraftCount, favoriteCount),
-                customerRiskFlags(user, orders, sessions, pendingDraftCount, favoriteCount),
+                customerLifecycleStage(orders, sessions, pendingDraftCount, favoriteCount, behaviorEventCount),
+                customerRiskFlags(user, orders, sessions, pendingDraftCount, favoriteCount, behaviorEventCount),
                 orders.stream().limit(5).map(this::toAdminOrderResponse).toList(),
                 sessions.stream().limit(5).map(this::toAdminAssistantSessionResponse).toList(),
                 drafts.stream().limit(5).map(this::toAdminAssistantDraftResponse).toList(),
-                favoriteService.listFavorites(user).stream().limit(5).toList());
+                favoriteService.listFavorites(user).stream().limit(5).toList(),
+                behaviorService.recentEvents(user, 8));
     }
 
     @Transactional(readOnly = true)
@@ -570,7 +612,8 @@ public class AdminService {
                 order.getCreatedAt(),
                 items,
                 orderTimelineService.listOrderTimeline(order),
-                afterSalesService.toResponse(order));
+                afterSalesService.toResponse(order),
+                orderInvoiceService.toResponse(order));
     }
 
     private KnowledgeDocumentResponse toKnowledgeDocumentResponse(KnowledgeDocument document) {
@@ -866,7 +909,8 @@ public class AdminService {
     private String customerLifecycleStage(List<ShopOrder> orders,
                                           List<AssistantSession> sessions,
                                           long pendingDraftCount,
-                                          long favoriteCount) {
+                                          long favoriteCount,
+                                          long behaviorEventCount) {
         long paidOrderCount = orders.stream().filter(this::countsTowardRevenue).count();
         boolean hasOpenSupport = sessions.stream()
                 .anyMatch(session -> SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus())));
@@ -875,6 +919,9 @@ public class AdminService {
         }
         if (pendingDraftCount > 0) {
             return "AI 转化中";
+        }
+        if (behaviorEventCount >= 6 && paidOrderCount == 0) {
+            return "高意向培育中";
         }
         if (favoriteCount > 0 && paidOrderCount == 0) {
             return "收藏培育中";
@@ -895,7 +942,8 @@ public class AdminService {
                                            List<ShopOrder> orders,
                                            List<AssistantSession> sessions,
                                            long pendingDraftCount,
-                                           long favoriteCount) {
+                                           long favoriteCount,
+                                           long behaviorEventCount) {
         List<String> flags = new java.util.ArrayList<>();
         if (blankToNull(user.getShippingAddress()) == null) {
             flags.add("未维护默认收货地址");
@@ -923,6 +971,9 @@ public class AdminService {
         }
         if (favoriteCount > 0 && orders.isEmpty()) {
             flags.add("已收藏 " + favoriteCount + " 件商品但尚未下单");
+        }
+        if (behaviorEventCount >= 6 && orders.isEmpty()) {
+            flags.add("近期有 " + behaviorEventCount + " 次商品行为但尚未成交");
         }
         if (flags.isEmpty()) {
             flags.add("暂无明显风险");

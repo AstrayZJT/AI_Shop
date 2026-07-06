@@ -19,11 +19,14 @@ public class ProductFavoriteService {
 
     private final ProductFavoriteRepository favoriteRepository;
     private final ProductService productService;
+    private final CustomerBehaviorService behaviorService;
 
     public ProductFavoriteService(ProductFavoriteRepository favoriteRepository,
-                                  ProductService productService) {
+                                  ProductService productService,
+                                  CustomerBehaviorService behaviorService) {
         this.favoriteRepository = favoriteRepository;
         this.productService = productService;
+        this.behaviorService = behaviorService;
     }
 
     @Transactional(readOnly = true)
@@ -57,7 +60,7 @@ public class ProductFavoriteService {
     @Transactional
     public FavoriteProductResponse addFavorite(AppUser user, Long productId) {
         Product product = productService.getProduct(productId);
-        return favoriteRepository.findByUserAndProduct(user, product)
+        FavoriteProductResponse response = favoriteRepository.findByUserAndProduct(user, product)
                 .map(this::toFavoriteResponse)
                 .orElseGet(() -> {
                     ProductFavorite favorite = new ProductFavorite();
@@ -65,12 +68,15 @@ public class ProductFavoriteService {
                     favorite.setProduct(product);
                     return toFavoriteResponse(favoriteRepository.save(favorite));
                 });
+        behaviorService.recordEvent(user, productId, CustomerBehaviorService.EVENT_FAVORITE, "favorite-api", null, 1);
+        return response;
     }
 
     @Transactional
     public void removeFavorite(AppUser user, Long productId) {
         Product product = productService.getProduct(productId);
         favoriteRepository.deleteByUserAndProduct(user, product);
+        behaviorService.recordEvent(user, productId, CustomerBehaviorService.EVENT_UNFAVORITE, "favorite-api", null, 1);
     }
 
     private FavoriteProductResponse toFavoriteResponse(ProductFavorite favorite) {

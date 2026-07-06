@@ -52,6 +52,7 @@ public class AssistantService {
     private final KnowledgeService knowledgeService;
     private final PromotionService promotionService;
     private final ProductFavoriteService favoriteService;
+    private final CustomerBehaviorService behaviorService;
     private final CompiledGraph<MessagesState<String>> assistantGraph;
     private final ChatModel chatModel;
 
@@ -62,6 +63,7 @@ public class AssistantService {
                             KnowledgeService knowledgeService,
                             PromotionService promotionService,
                             ProductFavoriteService favoriteService,
+                            CustomerBehaviorService behaviorService,
                             CompiledGraph<MessagesState<String>> assistantGraph,
                             ChatModel chatModel) {
         this.sessionRepository = sessionRepository;
@@ -71,6 +73,7 @@ public class AssistantService {
         this.knowledgeService = knowledgeService;
         this.promotionService = promotionService;
         this.favoriteService = favoriteService;
+        this.behaviorService = behaviorService;
         this.assistantGraph = assistantGraph;
         this.chatModel = chatModel;
     }
@@ -150,6 +153,17 @@ public class AssistantService {
         var intent = detectIntent(message);
         var matchedProducts = productService.search(message).stream().limit(3).toList();
         var favoriteProducts = favoriteService.recentFavoriteProducts(user, 3);
+        var behaviorProducts = behaviorService.recentInterestedProducts(user, 3);
+        var behaviorSummary = behaviorService.summarizeRecentBehavior(user, 6);
+        if (shouldRecordAssistantProductConsult(intent, message, matchedProducts)) {
+            behaviorService.recordEvent(
+                    user,
+                    matchedProducts.get(0).id(),
+                    CustomerBehaviorService.EVENT_AI_CONSULT,
+                    "assistant-chat",
+                    trim(message, 120),
+                    1);
+        }
         var allOrders = orderService.listOrders(user);
         var recentOrders = allOrders.stream().limit(3).toList();
         var exactOrder = findExactMentionedOrder(message, allOrders);
@@ -172,7 +186,7 @@ public class AssistantService {
         }
 
         var answer = actionExecution == null
-                ? buildPendingHandoffAnswer(session, user, intent, sourceTexts, matchedProducts, favoriteProducts, recentOrders, exactOrder, message, currentThreadId)
+                ? buildPendingHandoffAnswer(session, user, intent, sourceTexts, matchedProducts, favoriteProducts, behaviorProducts, behaviorSummary, recentOrders, exactOrder, message, currentThreadId)
                 : actionExecution.answer();
         var draftJson = actionExecution == null && !SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))
                 ? buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts, requestedQuantity)
@@ -239,6 +253,8 @@ public class AssistantService {
                                              List<String> sources,
                                              List<ProductResponse> matchedProducts,
                                              List<ProductResponse> favoriteProducts,
+                                             List<ProductResponse> behaviorProducts,
+                                             String behaviorSummary,
                                              List<OrderResponse> recentOrders,
                                              OrderResponse exactOrder,
                                              String message,
@@ -246,7 +262,7 @@ public class AssistantService {
         if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
             return "你的会话已经转给人工客服，我会把这条补充信息同步给人工同事，请稍候查看人工回复。";
         }
-        return buildAnswer(user, intent, sources, matchedProducts, favoriteProducts, recentOrders, exactOrder, message, threadId);
+        return buildAnswer(user, intent, sources, matchedProducts, favoriteProducts, behaviorProducts, behaviorSummary, recentOrders, exactOrder, message, threadId);
     }
 
     private String buildAnswer(AppUser user,
@@ -254,6 +270,8 @@ public class AssistantService {
                                List<String> sources,
                                List<ProductResponse> matchedProducts,
                                List<ProductResponse> favoriteProducts,
+                               List<ProductResponse> behaviorProducts,
+                               String behaviorSummary,
                                List<OrderResponse> recentOrders,
                                OrderResponse exactOrder,
                                String message,
@@ -262,6 +280,9 @@ public class AssistantService {
 
         if (isPromotionIntent(message)) {
             return buildPromotionAnswer(focusOrder, recentOrders, matchedProducts);
+        }
+        if (isInvoiceIntent(message)) {
+            return buildInvoiceGuide(focusOrder, recentOrders);
         }
         if (isKnowledgePolicyIntent(message) && !hasExplicitOrderReference(message) && !sources.isEmpty()) {
             return buildKnowledgeAnswer(sources);
@@ -295,7 +316,7 @@ public class AssistantService {
         }
         if ("order".equals(intent) && isPurchaseIntent(message)) {
             var product = matchedProducts.isEmpty()
-                    ? (favoriteProducts.isEmpty() ? productService.listAll().stream().findFirst().orElse(null) : favoriteProducts.get(0))
+                    ? firstAvailableProduct(favoriteProducts, behaviorProducts)
                     : matchedProducts.get(0);
             if (product != null) {
                 return "我已经为你准备了下单草稿，推荐商品是：%s，价格 %s。%s你确认后我就继续创建正式订单。"
@@ -305,6 +326,10 @@ public class AssistantService {
         if ("product".equals(intent) && matchedProducts.isEmpty() && !favoriteProducts.isEmpty()) {
             return "结合你最近收藏的商品，我建议先看这些：" + formatProducts(favoriteProducts)
                     + "。这些都在你的收藏里，适合继续比较价格、库存和口碑，也可以让我直接生成下单草稿。";
+        }
+        if ("product".equals(intent) && matchedProducts.isEmpty() && !behaviorProducts.isEmpty()) {
+            return "结合你最近浏览、加购或咨询过的商品，我建议继续看这些：" + formatProducts(behaviorProducts)
+                    + "。如果你说“刚才那个”，我会优先按这些近期行为来理解。";
         }
         if ("product".equals(intent) && !matchedProducts.isEmpty()) {
             if (matchedProducts.size() == 1) {
@@ -332,6 +357,8 @@ public class AssistantService {
                 默认收货地址：%s
                 候选商品：%s
                 最近收藏：%s
+                近期商品行为：%s
+                近期意向商品：%s
                 最近订单：%s
                 当前活动：%s
                 相关知识：%s
@@ -344,6 +371,8 @@ public class AssistantService {
                 user.getShippingAddress() == null ? "未填写" : user.getShippingAddress(),
                 matchedProducts.isEmpty() ? "无" : formatProducts(matchedProducts),
                 favoriteProducts.isEmpty() ? "无" : formatProducts(favoriteProducts),
+                behaviorSummary,
+                behaviorProducts.isEmpty() ? "无" : formatProducts(behaviorProducts),
                 recentOrders.isEmpty() ? "无" : formatOrders(recentOrders),
                 summarizePromotionsForPrompt(focusOrder, recentOrders, matchedProducts),
                 sources.isEmpty() ? "无" : String.join(" | ", sources));
@@ -759,6 +788,8 @@ public class AssistantService {
                 || text.contains("买")
                 || text.contains("结算")
                 || text.contains("订单")
+                || text.contains("发票")
+                || text.contains("开票")
                 || text.contains("物流")
                 || text.contains("发货")
                 || text.contains("支付")
@@ -814,6 +845,15 @@ public class AssistantService {
                 || text.contains("付钱")
                 || text.contains("补款")
                 || text.contains("结清");
+    }
+
+    private boolean isInvoiceIntent(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        return text.contains("发票")
+                || text.contains("开票")
+                || text.contains("电子票")
+                || text.contains("专票")
+                || text.contains("普票");
     }
 
     private boolean isConfirmReceiptIntent(String message) {
@@ -1073,6 +1113,41 @@ public class AssistantService {
                     .formatted(candidate.orderNo(), statusLabel(candidate.status()));
         }
         return "你最近没有待支付的订单；如果你刚完成支付，我也可以继续帮你查后续发货进度。";
+    }
+
+    private String buildInvoiceGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
+        if (orders.isEmpty()) {
+            return "你当前还没有订单，暂时没有可申请发票的对象。完成下单并支付后，我可以继续帮你看发票状态。";
+        }
+        if (focusOrder == null) {
+            focusOrder = orders.get(0);
+        }
+        var invoice = focusOrder.invoice();
+        if (invoice != null) {
+            return switch (invoice.status()) {
+                case "REQUESTED" -> "订单 %s 的发票申请已经提交，当前正在等待平台开票。抬头是 %s，接收邮箱 %s。"
+                        .formatted(focusOrder.orderNo(), invoice.invoiceTitle(), invoice.email());
+                case "ISSUED" -> "订单 %s 的发票已经开具完成，发票号码 %s，接收邮箱 %s。%s"
+                        .formatted(
+                                focusOrder.orderNo(),
+                                defaultText(invoice.invoiceNo(), "待补充"),
+                                invoice.email(),
+                                defaultText(invoice.adminReply(), "你可以到订单详情里查看开票信息。"));
+                case "REJECTED" -> "订单 %s 的发票申请已被驳回。原因：%s。你可以在订单卡片里重新填写抬头和邮箱后再次提交。"
+                        .formatted(focusOrder.orderNo(), defaultText(invoice.adminReply(), "平台未补充驳回说明"));
+                default -> "订单 %s 当前有一条发票记录，状态是 %s。"
+                        .formatted(focusOrder.orderNo(), invoice.status());
+            };
+        }
+        if (focusOrder.paidAt() == null) {
+            return "订单 %s 还没有完成支付，通常需要先支付成功后才能申请发票。"
+                    .formatted(focusOrder.orderNo());
+        }
+        if ("CANCELLED".equals(focusOrder.status())) {
+            return "订单 %s 已经取消，通常不能再申请发票。".formatted(focusOrder.orderNo());
+        }
+        return "订单 %s 已经支付成功，目前还没有发票申请。你可以在“我的订单”里填写抬头类型、发票抬头和接收邮箱后提交开票申请。"
+                .formatted(focusOrder.orderNo());
     }
 
     private String buildCancelGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
@@ -1409,6 +1484,12 @@ public class AssistantService {
         if (order.paidAt() != null) {
             builder.append(", 支付时间").append(order.paidAt());
         }
+        if (order.invoice() != null) {
+            builder.append(", 发票").append(invoiceStatusLabel(order.invoice().status()));
+            if (order.invoice().invoiceNo() != null && !order.invoice().invoiceNo().isBlank()) {
+                builder.append(", 票号").append(order.invoice().invoiceNo());
+            }
+        }
         if (logisticsEvent != null && logisticsEvent.detail() != null && !logisticsEvent.detail().isBlank()) {
             builder.append(", 最新物流").append(logisticsEvent.detail());
         }
@@ -1455,6 +1536,26 @@ public class AssistantService {
         };
     }
 
+    private boolean shouldRecordAssistantProductConsult(String intent,
+                                                        String message,
+                                                        List<ProductResponse> matchedProducts) {
+        return !matchedProducts.isEmpty()
+                && ("product".equals(intent)
+                || isPurchaseIntent(message)
+                || isPromotionIntent(message));
+    }
+
+    private ProductResponse firstAvailableProduct(List<ProductResponse> favoriteProducts,
+                                                  List<ProductResponse> behaviorProducts) {
+        if (!favoriteProducts.isEmpty()) {
+            return favoriteProducts.get(0);
+        }
+        if (!behaviorProducts.isEmpty()) {
+            return behaviorProducts.get(0);
+        }
+        return productService.listAll().stream().findFirst().orElse(null);
+    }
+
     private String formatProducts(List<ProductResponse> products) {
         return products.stream()
                 .map(product -> "%s(%s, 库存%s%s)".formatted(
@@ -1486,10 +1587,11 @@ public class AssistantService {
                             : ", " + order.timeline().get(order.timeline().size() - 1).title();
                     String afterSales = order.afterSales() == null ? "" : ", 售后" + afterSalesStatusLabel(order.afterSales().status());
                     String payment = order.paidAt() == null ? "" : ", 已支付";
+                    String invoice = order.invoice() == null ? "" : ", 发票" + invoiceStatusLabel(order.invoice().status());
                     String promotion = hasDiscount(order)
                             ? ", 优惠" + order.discountAmount() + (defaultText(order.promotionTitle(), order.promotionCode()) == null ? "" : ", 活动" + defaultText(order.promotionTitle(), order.promotionCode()))
                             : "";
-                    return "%s[%s, %s%s%s%s%s]".formatted(order.orderNo(), statusLabel(order.status()), order.totalAmount(), promotion, payment, latest, afterSales);
+                    return "%s[%s, %s%s%s%s%s%s]".formatted(order.orderNo(), statusLabel(order.status()), order.totalAmount(), promotion, payment, invoice, latest, afterSales);
                 })
                 .reduce((left, right) -> left + " | " + right)
                 .orElse("无");
@@ -1509,6 +1611,15 @@ public class AssistantService {
             case "REFUNDED" -> "售后已完成";
             case "REJECTED" -> "售后已驳回";
             default -> "售后处理中";
+        };
+    }
+
+    private String invoiceStatusLabel(String status) {
+        return switch (status) {
+            case "REQUESTED" -> "待开票";
+            case "ISSUED" -> "已开票";
+            case "REJECTED" -> "已驳回";
+            default -> "处理中";
         };
     }
 

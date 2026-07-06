@@ -165,6 +165,19 @@ function afterSalesStatusLabel(status) {
   return AFTER_SALES_STATUS_LABELS[status] || "售后处理中";
 }
 
+function invoiceStatusLabel(status) {
+  switch ((status || "").toUpperCase()) {
+    case "REQUESTED":
+      return "待开票";
+    case "ISSUED":
+      return "已开票";
+    case "REJECTED":
+      return "已驳回";
+    default:
+      return "处理中";
+  }
+}
+
 function assistantServiceStatusLabel(status) {
   return ASSISTANT_SERVICE_STATUS_LABELS[status] || ASSISTANT_SERVICE_STATUS_LABELS.ACTIVE;
 }
@@ -1750,6 +1763,7 @@ function renderOrders() {
       </div>
       ${renderAdminOrderPromotionMeta(order)}
       ${renderAdminOrderPaymentMeta(order)}
+      ${renderAdminOrderInvoiceMeta(order)}
       ${renderAdminOrderShippingMeta(order)}
       ${order.afterSales ? `<div class="inline-meta">售后阶段 ${escapeHtml(afterSalesStatusLabel(order.afterSales.status))}</div>` : ""}
       ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
@@ -1780,6 +1794,12 @@ function renderOrders() {
   });
   host.querySelectorAll(".save-logistics-update-btn").forEach((button) => {
     button.addEventListener("click", () => runAdminAction(() => appendLogisticsUpdate(Number(button.dataset.orderId))));
+  });
+  host.querySelectorAll(".issue-invoice-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => issueInvoice(Number(button.dataset.orderId))));
+  });
+  host.querySelectorAll(".reject-invoice-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => rejectInvoice(Number(button.dataset.orderId))));
   });
 }
 
@@ -1825,10 +1845,12 @@ function renderAdminOrderControls(order) {
     ? "审核意见，例如同意退款原因或驳回说明"
     : "运营备注，例如催发货、用户沟通结果";
   const logisticsBlock = renderAdminLogisticsUpdateBlock(order);
+  const invoiceBlock = renderAdminInvoiceControls(order);
 
   if (order.status === "REFUND_REQUESTED") {
     return `
       ${renderAdminAfterSalesControls(order, notePlaceholder)}
+      ${invoiceBlock}
       ${logisticsBlock}
     `;
   }
@@ -1836,6 +1858,7 @@ function renderAdminOrderControls(order) {
   if (!nextStatuses.length) {
     return `
       <div class="panel-hint">当前订单已经进入最终状态，暂无可继续推进的履约动作。</div>
+      ${invoiceBlock}
       ${logisticsBlock}
     `;
   }
@@ -1857,6 +1880,7 @@ function renderAdminOrderControls(order) {
       </div>
       <div class="panel-hint">这里只显示符合当前状态的下一步动作，减少误操作导致的流程跳跃。</div>
     </div>
+    ${invoiceBlock}
     ${logisticsBlock}
   `;
 }
@@ -1942,6 +1966,21 @@ function renderAdminOrderPaymentMeta(order) {
   return lines.join("");
 }
 
+function renderAdminOrderInvoiceMeta(order) {
+  const invoice = order.invoice;
+  if (!invoice) {
+    return order.paidAt ? `<div class="inline-meta">发票状态 可申请电子发票</div>` : "";
+  }
+  const lines = [`<div class="inline-meta">发票状态 ${escapeHtml(invoiceStatusLabel(invoice.status))}</div>`];
+  if (invoice.invoiceTitle) {
+    lines.push(`<div class="inline-meta">抬头 ${escapeHtml(invoice.invoiceTitle)}</div>`);
+  }
+  if (invoice.invoiceNo) {
+    lines.push(`<div class="inline-meta">发票号码 ${escapeHtml(invoice.invoiceNo)}</div>`);
+  }
+  return lines.join("");
+}
+
 function renderAdminOrderPromotionMeta(order) {
   const lines = [];
   if (Number(order.originalAmount || 0) > 0 && Number(order.originalAmount || 0) !== Number(order.totalAmount || 0)) {
@@ -1985,6 +2024,38 @@ function renderAdminLogisticsUpdateBlock(order) {
         <button type="button" class="secondary save-logistics-update-btn" data-order-id="${order.id}">追加物流节点</button>
       </div>
       <div class="panel-hint">物流节点会进入订单时间线，客户端订单页和 AI 查物流都会优先读取最新节点。</div>
+    </div>
+  `;
+}
+
+function renderAdminInvoiceControls(order) {
+  const invoice = order.invoice;
+  if (!invoice) {
+    return "";
+  }
+  if (invoice.status === "REQUESTED") {
+    return `
+      <div class="order-action-block">
+        <div class="panel-hint">待处理发票申请：${escapeHtml(invoice.invoiceTitle || "未填写抬头")} · ${escapeHtml(invoice.headerType === "COMPANY" ? "企业" : "个人")} · ${escapeHtml(invoice.email || "未填写邮箱")}</div>
+        ${invoice.taxNo ? `<div class="inline-meta">税号 ${escapeHtml(invoice.taxNo)}</div>` : ""}
+        ${invoice.note ? `<div class="inline-meta">用户备注 ${escapeHtml(invoice.note)}</div>` : ""}
+        <input class="admin-invoice-no-input" data-order-id="${order.id}" placeholder="发票号码，可留空自动生成" value="${escapeHtml(invoice.invoiceNo || "")}">
+        <textarea class="admin-invoice-note-input" data-order-id="${order.id}" placeholder="开票说明或驳回原因，例如已发送至邮箱">${escapeHtml(invoice.adminReply || "")}</textarea>
+        <div class="order-actions">
+          <button type="button" class="primary issue-invoice-btn" data-order-id="${order.id}">完成开票</button>
+          <button type="button" class="ghost reject-invoice-btn" data-order-id="${order.id}">驳回申请</button>
+        </div>
+        <div class="panel-hint">开票完成后会写入发票号码并同步到客户端订单详情和 AI 查询上下文。</div>
+      </div>
+    `;
+  }
+  return `
+    <div class="order-action-block">
+      <div class="panel-hint">发票状态：${escapeHtml(invoiceStatusLabel(invoice.status))}</div>
+      ${invoice.invoiceTitle ? `<div class="inline-meta">抬头 ${escapeHtml(invoice.invoiceTitle)}</div>` : ""}
+      ${invoice.email ? `<div class="inline-meta">接收邮箱 ${escapeHtml(invoice.email)}</div>` : ""}
+      ${invoice.invoiceNo ? `<div class="inline-meta">发票号码 ${escapeHtml(invoice.invoiceNo)}</div>` : ""}
+      ${invoice.adminReply ? `<div class="inline-meta">平台说明 ${escapeHtml(invoice.adminReply)}</div>` : ""}
     </div>
   `;
 }
@@ -2347,6 +2418,7 @@ function renderCustomerInsight() {
         ${customerInsightMetric("售后", `${insight.afterSalesCount || 0} 个`)}
         ${customerInsightMetric("地址", `${insight.addressCount || 0} 个`)}
         ${customerInsightMetric("收藏", `${insight.favoriteCount || 0} 件`)}
+        ${customerInsightMetric("行为", `${insight.behaviorEventCount || 0} 次`)}
         ${customerInsightMetric("AI 会话", `${insight.activeAssistantSessionCount || 0} 个活跃`)}
         ${customerInsightMetric("AI 草稿", `${insight.pendingDraftCount || 0} 个待确认`)}
       </div>
@@ -2358,6 +2430,7 @@ function renderCustomerInsight() {
         ${renderCustomerInsightSessions(insight.recentAssistantSessions || [])}
         ${renderCustomerInsightDrafts(insight.recentDrafts || [])}
         ${renderCustomerInsightFavorites(insight.recentFavorites || [])}
+        ${renderCustomerInsightProductEvents(insight.recentProductEvents || [])}
       </div>
     </section>
   `;
@@ -2485,6 +2558,55 @@ function renderCustomerInsightFavorites(favorites) {
               </div>
               <div class="inline-meta">${escapeHtml(product.category || "未分类")} · 库存 ${escapeHtml(product.stock || 0)}</div>
               <div class="inline-meta">收藏时间 ${escapeHtml(formatDateTime(favorite.createdAt))}</div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function customerProductEventLabel(eventType) {
+  switch ((eventType || "").toUpperCase()) {
+    case "AI_CONSULT":
+      return "AI 咨询";
+    case "ADD_TO_CART":
+      return "加购";
+    case "FAVORITE":
+      return "收藏";
+    case "UNFAVORITE":
+      return "取消收藏";
+    case "CHECKOUT":
+      return "结算";
+    default:
+      return "浏览";
+  }
+}
+
+function renderCustomerInsightProductEvents(events) {
+  if (!events.length) {
+    return `
+      <article class="assistant-context-card">
+        <div class="assistant-context-title">最近商品行为</div>
+        <div class="panel-hint">当前还没有记录到最近浏览、加购或咨询行为。</div>
+      </article>
+    `;
+  }
+  return `
+    <article class="assistant-context-card">
+      <div class="assistant-context-title">最近商品行为</div>
+      <div class="assistant-context-list">
+        ${events.map((event) => {
+          const product = event.product || {};
+          return `
+            <div class="assistant-order-mini">
+              <div class="row-top">
+                <strong>${escapeHtml(product.name || "商品行为")}</strong>
+                <span class="tag info">${escapeHtml(customerProductEventLabel(event.eventType))}</span>
+              </div>
+              <div class="inline-meta">${money(product.price)} · ${escapeHtml(product.category || "未分类")}</div>
+              <div class="inline-meta">${escapeHtml(formatDateTime(event.createdAt))}${event.quantity > 1 ? ` · 数量 ${escapeHtml(event.quantity)}` : ""}</div>
+              ${event.detail ? `<div class="panel-hint">${escapeHtml(event.detail)}</div>` : ""}
             </div>
           `;
         }).join("")}
@@ -2884,6 +3006,14 @@ function readAdminLogisticsUpdate(orderId) {
   return document.querySelector(`.admin-logistics-update-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
+function readAdminInvoiceNo(orderId) {
+  return document.querySelector(`.admin-invoice-no-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readAdminInvoiceNote(orderId) {
+  return document.querySelector(`.admin-invoice-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
 function readAssistantReplyContent() {
   return adminById("adminAssistantReplyInput")?.value?.trim() || "";
 }
@@ -3032,6 +3162,34 @@ async function confirmReturnAndRefund(orderId) {
   });
   await loadAdminData();
   setAdminStatus("已确认收到退货并完成退款");
+}
+
+async function issueInvoice(orderId) {
+  await adminFetchJson(`/api/admin/orders/${orderId}/invoice/issue`, {
+    method: "POST",
+    body: JSON.stringify({
+      invoiceNo: readAdminInvoiceNo(orderId),
+      note: readAdminInvoiceNote(orderId),
+    }),
+  });
+  await loadAdminData();
+  setAdminStatus("电子发票已开具并同步到客户端");
+}
+
+async function rejectInvoice(orderId) {
+  const note = readAdminInvoiceNote(orderId);
+  if (!note) {
+    throw new Error("请先填写驳回原因");
+  }
+  await adminFetchJson(`/api/admin/orders/${orderId}/invoice/reject`, {
+    method: "POST",
+    body: JSON.stringify({
+      invoiceNo: "",
+      note,
+    }),
+  });
+  await loadAdminData();
+  setAdminStatus("发票申请已驳回");
 }
 
 function focusOrder(orderNo, filterStatus = "ALL") {

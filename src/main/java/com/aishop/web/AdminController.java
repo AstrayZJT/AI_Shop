@@ -28,6 +28,7 @@ import com.aishop.dto.AdminDtos.ProductUpsertRequest;
 import com.aishop.dto.AdminDtos.RefundReviewRequest;
 import com.aishop.dto.AdminDtos.ReturnInstructionRequest;
 import com.aishop.dto.AdminDtos.UpdateOrderStatusRequest;
+import com.aishop.dto.OrderDtos.InvoiceReviewRequest;
 import com.aishop.dto.KnowledgeDtos.ImportRequest;
 import com.aishop.dto.PromotionDtos.PromotionResponse;
 import com.aishop.dto.PromotionDtos.PromotionUpsertRequest;
@@ -152,6 +153,22 @@ public class AdminController {
                                                      @RequestBody RefundReviewRequest request) {
         var admin = authService.requireAdmin(session);
         return adminService.confirmReturnAndRefund(id, admin, request.note());
+    }
+
+    @PostMapping("/api/admin/orders/{id}/invoice/issue")
+    public AdminOrderResponse issueInvoice(HttpSession session,
+                                           @PathVariable Long id,
+                                           @RequestBody InvoiceReviewRequest request) {
+        var admin = authService.requireAdmin(session);
+        return adminService.issueInvoice(id, admin, request.invoiceNo(), request.note());
+    }
+
+    @PostMapping("/api/admin/orders/{id}/invoice/reject")
+    public AdminOrderResponse rejectInvoice(HttpSession session,
+                                            @PathVariable Long id,
+                                            @RequestBody InvoiceReviewRequest request) {
+        var admin = authService.requireAdmin(session);
+        return adminService.rejectInvoice(id, admin, request.note());
     }
 
     @GetMapping("/api/admin/knowledge/documents")

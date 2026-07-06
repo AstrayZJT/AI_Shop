@@ -6,8 +6,10 @@ import java.util.List;
 
 import com.aishop.dto.KnowledgeDtos.SearchResponse;
 import com.aishop.dto.OrderDtos.AfterSalesResponse;
+import com.aishop.dto.OrderDtos.InvoiceResponse;
 import com.aishop.dto.OrderDtos.OrderTimelineResponse;
 import com.aishop.dto.ProductDtos.FavoriteProductResponse;
+import com.aishop.dto.ProductDtos.ProductEventResponse;
 
 public final class AdminDtos {
     private AdminDtos() {
@@ -57,7 +59,8 @@ public final class AdminDtos {
                                      Instant createdAt,
                                      List<AdminOrderItemResponse> items,
                                      List<OrderTimelineResponse> timeline,
-                                     AfterSalesResponse afterSales) {}
+                                     AfterSalesResponse afterSales,
+                                     InvoiceResponse invoice) {}
 
     public record UpdateOrderStatusRequest(String status, String note, String shippingCarrier, String trackingNo) {}
 
@@ -111,6 +114,7 @@ public final class AdminDtos {
                                                long afterSalesCount,
                                                long addressCount,
                                                long favoriteCount,
+                                               long behaviorEventCount,
                                                long activeAssistantSessionCount,
                                                long pendingDraftCount,
                                                String lifecycleStage,
@@ -118,7 +122,8 @@ public final class AdminDtos {
                                                List<AdminOrderResponse> recentOrders,
                                                List<AdminAssistantSessionResponse> recentAssistantSessions,
                                                List<AdminAssistantDraftResponse> recentDrafts,
-                                               List<FavoriteProductResponse> recentFavorites) {}
+                                               List<FavoriteProductResponse> recentFavorites,
+                                               List<ProductEventResponse> recentProductEvents) {}
 
     public record AdminAssistantSessionResponse(Long id,
                                                 String threadId,

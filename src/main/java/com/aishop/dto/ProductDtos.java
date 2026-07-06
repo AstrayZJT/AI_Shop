@@ -22,6 +22,18 @@ public final class ProductDtos {
     public record FavoriteProductResponse(Long favoriteId,
                                           Instant createdAt,
                                           ProductResponse product) {}
+    public record ProductEventRequest(Long productId,
+                                      String eventType,
+                                      String source,
+                                      String detail,
+                                      Integer quantity) {}
+    public record ProductEventResponse(Long id,
+                                       String eventType,
+                                       String source,
+                                       String detail,
+                                       Integer quantity,
+                                       Instant createdAt,
+                                       ProductResponse product) {}
     public record ProductReviewRequest(Integer rating, String content) {}
     public record ProductReviewResponse(Long id,
                                         Long productId,

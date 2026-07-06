@@ -7,6 +7,7 @@ const clientState = {
   cart: { items: [], totalAmount: 0, totalItems: 0 },
   favorites: [],
   favoriteProductIds: [],
+  productEvents: [],
   addresses: [],
   selectedAddressId: null,
   editingAddressId: null,
@@ -140,6 +141,19 @@ function afterSalesStatusLabel(status) {
   return AFTER_SALES_STATUS_LABELS[status] || "售后处理中";
 }
 
+function invoiceStatusLabel(status) {
+  switch ((status || "").toUpperCase()) {
+    case "REQUESTED":
+      return "待开票";
+    case "ISSUED":
+      return "已开票";
+    case "REJECTED":
+      return "已驳回";
+    default:
+      return "处理中";
+  }
+}
+
 function draftStatusLabel(status) {
   if (status === "PENDING_CONFIRMATION") {
     return "待确认";
@@ -222,6 +236,42 @@ function favoriteProducts() {
   return clientState.favorites
     .map((favorite) => favorite.product)
     .filter(Boolean);
+}
+
+function productEventLabel(eventType) {
+  switch ((eventType || "").toUpperCase()) {
+    case "AI_CONSULT":
+      return "AI 咨询";
+    case "ADD_TO_CART":
+      return "加购";
+    case "FAVORITE":
+      return "收藏";
+    case "UNFAVORITE":
+      return "取消收藏";
+    case "CHECKOUT":
+      return "结算";
+    default:
+      return "浏览";
+  }
+}
+
+function recentProductEvents(productId) {
+  return clientState.productEvents.filter((event) => event.product?.id === productId);
+}
+
+function productBehaviorScore(productId) {
+  const weights = {
+    CHECKOUT: 28,
+    ADD_TO_CART: 24,
+    AI_CONSULT: 20,
+    FAVORITE: 18,
+    VIEW: 10,
+    UNFAVORITE: -12,
+  };
+  return recentProductEvents(productId).slice(0, 6).reduce((score, event, index) => {
+    const weight = weights[(event.eventType || "").toUpperCase()] ?? 6;
+    return score + Math.max(1, weight - index * 2);
+  }, 0);
 }
 
 function favoriteButtonMarkup(productId, compact = false) {
@@ -533,6 +583,12 @@ function effectiveScene() {
   if (combined.includes("拍照") || combined.includes("手机") || combined.includes("影像")) {
     return sceneDefinition("MOBILE");
   }
+  if (clientState.productEvents.some((event) => event.product?.category === "手机数码")) {
+    return sceneDefinition("MOBILE");
+  }
+  if (clientState.productEvents.some((event) => normalizeText(event.product?.name).includes("耳机"))) {
+    return sceneDefinition("COMMUTE");
+  }
   if (combined.includes("游戏") || combined.includes("音箱") || combined.includes("娱乐")) {
     return sceneDefinition("ENTERTAINMENT");
   }
@@ -575,6 +631,7 @@ function productRecommendationScore(product) {
   if (isFavoriteProduct(product.id)) {
     score += 36;
   }
+  score += productBehaviorScore(product.id);
   if (scene.keywords.length && scene.keywords.some((keyword) => pool.includes(normalizeText(keyword)))) {
     score += 55;
   }
@@ -644,6 +701,14 @@ function recommendationReasonTags(product) {
   }
   if (isFavoriteProduct(product.id)) {
     tags.push("已收藏");
+  }
+  const events = recentProductEvents(product.id);
+  if (events.some((event) => event.eventType === "ADD_TO_CART")) {
+    tags.push("近期加购");
+  } else if (events.some((event) => event.eventType === "AI_CONSULT")) {
+    tags.push("AI 咨询过");
+  } else if (events.some((event) => event.eventType === "VIEW")) {
+    tags.push("最近浏览");
   }
   return Array.from(new Set(tags)).slice(0, 3);
 }
@@ -1024,6 +1089,40 @@ function renderFavorites() {
   bindCatalogActionButtons(host);
 }
 
+function renderProductEvents() {
+  const host = clientById("productEventList");
+  const summary = clientById("productEventSummary");
+  if (!host || !summary) {
+    return;
+  }
+  if (!clientState.user) {
+    summary.textContent = "登录后会记录最近的浏览、咨询、加购和结算行为。";
+    host.innerHTML = `<div class="empty-state">登录后可查看商品足迹。</div>`;
+    return;
+  }
+  summary.textContent = clientState.productEvents.length
+    ? `最近记录 ${clientState.productEvents.length} 条商品行为，推荐区和 AI 客服都会参考。`
+    : "还没有商品足迹，浏览详情、咨询 AI 或加入购物车后会出现在这里。";
+  if (!clientState.productEvents.length) {
+    host.innerHTML = `<div class="empty-state">最近还没有商品行为记录。</div>`;
+    return;
+  }
+  host.innerHTML = clientState.productEvents.map((event) => {
+    const product = event.product || {};
+    return `
+      <article class="favorite-mini-card">
+        <div class="row-top">
+          <strong>${escapeHtml(product.name || "商品行为")}</strong>
+          <span class="tag info">${escapeHtml(productEventLabel(event.eventType))}</span>
+        </div>
+        <div class="inline-meta">${currency(product.price)} · ${escapeHtml(product.category || "未分类")}</div>
+        <div class="inline-meta">${escapeHtml(formatMessageTime(event.createdAt))}</div>
+        ${event.detail ? `<div class="panel-hint">${escapeHtml(event.detail)}</div>` : ""}
+      </article>
+    `;
+  }).join("");
+}
+
 function productAudienceText(product) {
   const pool = productSearchPool(product);
   if (pool.includes("降噪") || pool.includes("通勤")) {
@@ -1079,6 +1178,7 @@ async function openProductDetail(productId) {
   }
   clientState.selectedProductId = productId;
   renderCatalogExperience();
+  await trackProductEvent(productId, "VIEW", { source: "product-detail", detail: "查看商品详情" });
   await loadProductReviews(productId, { force: true });
   clientById("productDetailPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -1126,6 +1226,35 @@ async function loadFavorites() {
   renderCatalogExperience();
 }
 
+async function loadProductEvents() {
+  if (!clientState.user) {
+    clientState.productEvents = [];
+    renderProductEvents();
+    renderCatalogExperience();
+    return;
+  }
+  clientState.productEvents = await clientFetchJson("/api/products/events");
+  renderProductEvents();
+  renderCatalogExperience();
+}
+
+async function trackProductEvent(productId, eventType, options = {}) {
+  if (!clientState.user || !productId) {
+    return;
+  }
+  await clientFetchJson("/api/products/events", {
+    method: "POST",
+    body: JSON.stringify({
+      productId,
+      eventType,
+      source: options.source || "client",
+      detail: options.detail || "",
+      quantity: options.quantity || 1,
+    }),
+  });
+  await loadProductEvents();
+}
+
 async function toggleFavoriteProduct(productId) {
   if (!clientState.user) {
     throw new Error("请先登录后再收藏商品");
@@ -1137,7 +1266,7 @@ async function toggleFavoriteProduct(productId) {
     const favorite = await clientFetchJson(`/api/favorites/products/${productId}`, { method: "POST" });
     setStoreStatus(`已收藏 ${favorite.product?.name || "商品"}，AI 推荐会参考你的收藏偏好`);
   }
-  await loadFavorites();
+  await Promise.all([loadFavorites(), loadProductEvents()]);
 }
 
 async function loadProductReviews(productId, options = {}) {
@@ -1764,6 +1893,7 @@ function renderOrders() {
         ${renderOrderPromotionMeta(order)}
         <div class="inline-meta">地址 ${escapeHtml(order.shippingAddress || "待补充收货地址")}</div>
         ${renderOrderPaymentMeta(order)}
+        ${renderOrderInvoiceMeta(order)}
         ${renderOrderShippingMeta(order)}
         ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
       </div>
@@ -1785,6 +1915,9 @@ function renderOrders() {
   });
   host.querySelectorAll(".review-submit-btn").forEach((button) => {
     button.addEventListener("click", () => runClientAction(() => submitProductReview(Number(button.dataset.orderId), Number(button.dataset.itemId))));
+  });
+  host.querySelectorAll(".invoice-request-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => requestInvoice(Number(button.dataset.orderId))));
   });
 }
 
@@ -1860,6 +1993,7 @@ function renderOrderActionArea(order) {
       <div class="panel-hint">${escapeHtml(orderActionHint(order))}</div>
     </div>
     ${renderAfterSalesPanel(order)}
+    ${renderInvoicePanel(order)}
   `;
 }
 
@@ -1928,6 +2062,13 @@ function canUpdateShippingAddress(status) {
   return status === "PENDING_PAYMENT" || status === "CONFIRMED" || status === "PROCESSING";
 }
 
+function canRequestInvoice(order) {
+  if (!order || !order.paidAt || order.status === "CANCELLED") {
+    return false;
+  }
+  return !order.invoice || order.invoice.status === "REJECTED";
+}
+
 function renderOrderPaymentMeta(order) {
   const lines = [];
   if (order.paymentMethod) {
@@ -1940,6 +2081,21 @@ function renderOrderPaymentMeta(order) {
     lines.push(`<div class="inline-meta">支付时间 ${escapeHtml(new Date(order.paidAt).toLocaleString("zh-CN"))}</div>`);
   } else if (order.status === "PENDING_PAYMENT") {
     lines.push(`<div class="inline-meta">支付状态 待完成模拟支付</div>`);
+  }
+  return lines.join("");
+}
+
+function renderOrderInvoiceMeta(order) {
+  const invoice = order.invoice;
+  if (!invoice) {
+    return order.paidAt ? `<div class="inline-meta">发票状态 可申请电子发票</div>` : "";
+  }
+  const lines = [`<div class="inline-meta">发票状态 ${escapeHtml(invoiceStatusLabel(invoice.status))}</div>`];
+  if (invoice.invoiceTitle) {
+    lines.push(`<div class="inline-meta">发票抬头 ${escapeHtml(invoice.invoiceTitle)}</div>`);
+  }
+  if (invoice.invoiceNo) {
+    lines.push(`<div class="inline-meta">发票号码 ${escapeHtml(invoice.invoiceNo)}</div>`);
   }
   return lines.join("");
 }
@@ -2027,6 +2183,70 @@ function renderAfterSalesPanel(order) {
       <div class="panel-hint">${escapeHtml(hint)}</div>
     </div>
   `;
+}
+
+function renderInvoicePanel(order) {
+  const invoice = order.invoice;
+  if (!invoice && !canRequestInvoice(order)) {
+    return "";
+  }
+  const headerType = invoice?.headerType || "PERSONAL";
+  return `
+    <div class="after-sales-panel">
+      <div class="row-top">
+        <strong>电子发票</strong>
+        <div class="tag info">${escapeHtml(invoice ? invoiceStatusLabel(invoice.status) : "可申请")}</div>
+      </div>
+      <div class="after-sales-grid">
+        ${invoice?.invoiceTitle ? `<div class="inline-meta">抬头 ${escapeHtml(invoice.invoiceTitle)}</div>` : ""}
+        ${invoice?.headerType ? `<div class="inline-meta">类型 ${escapeHtml(invoice.headerType === "COMPANY" ? "企业" : "个人")}</div>` : ""}
+        ${invoice?.taxNo ? `<div class="inline-meta">税号 ${escapeHtml(invoice.taxNo)}</div>` : ""}
+        ${invoice?.email ? `<div class="inline-meta">接收邮箱 ${escapeHtml(invoice.email)}</div>` : ""}
+        ${invoice?.invoiceNo ? `<div class="inline-meta">发票号码 ${escapeHtml(invoice.invoiceNo)}</div>` : ""}
+        ${invoice?.requestedAt ? `<div class="inline-meta">申请时间 ${escapeHtml(formatMessageTime(invoice.requestedAt))}</div>` : ""}
+        ${invoice?.issuedAt ? `<div class="inline-meta">开票时间 ${escapeHtml(formatMessageTime(invoice.issuedAt))}</div>` : ""}
+        ${invoice?.adminReply ? `<div class="inline-meta">平台说明 ${escapeHtml(invoice.adminReply)}</div>` : ""}
+      </div>
+      ${canRequestInvoice(order) ? `
+        <div class="review-form">
+          <select class="invoice-header-type-select" data-order-id="${order.id}">
+            <option value="PERSONAL" ${headerType === "PERSONAL" ? "selected" : ""}>个人抬头</option>
+            <option value="COMPANY" ${headerType === "COMPANY" ? "selected" : ""}>企业抬头</option>
+          </select>
+          <input class="invoice-title-input" data-order-id="${order.id}" placeholder="发票抬头" value="${escapeHtml(invoice?.invoiceTitle || clientState.user?.displayName || "")}">
+          <input class="invoice-tax-no-input" data-order-id="${order.id}" placeholder="企业税号（个人可留空）" value="${escapeHtml(invoice?.taxNo || "")}">
+          <input class="invoice-email-input" data-order-id="${order.id}" placeholder="接收邮箱" value="${escapeHtml(invoice?.email || "")}">
+          <textarea class="invoice-note-input" data-order-id="${order.id}" placeholder="开票备注，例如企业报销、请尽快发送到邮箱">${escapeHtml(invoice?.note || "")}</textarea>
+          <div class="order-actions">
+            <button type="button" class="secondary invoice-request-btn" data-order-id="${order.id}">
+              ${invoice?.status === "REJECTED" ? "重新申请发票" : "申请电子发票"}
+            </button>
+          </div>
+        </div>
+      ` : ""}
+      <div class="panel-hint">${escapeHtml(invoicePanelHint(order))}</div>
+    </div>
+  `;
+}
+
+function invoicePanelHint(order) {
+  const invoice = order.invoice;
+  if (!order.paidAt) {
+    return "通常需要先完成支付，订单进入已支付状态后才能申请电子发票。";
+  }
+  if (!invoice) {
+    return "填写发票抬头和接收邮箱后即可提交申请，管理端开票完成后会回写发票号码。";
+  }
+  if (invoice.status === "REQUESTED") {
+    return "你的发票申请已经提交，等待平台开票。";
+  }
+  if (invoice.status === "ISSUED") {
+    return "电子发票已经开具完成，可根据票号和邮箱信息留档。";
+  }
+  if (invoice.status === "REJECTED") {
+    return "发票申请被驳回后，可以修改抬头、税号或邮箱后重新提交。";
+  }
+  return "当前发票申请正在处理中。";
 }
 
 function renderAfterSalesReturnForm(order, afterSales) {
@@ -2235,6 +2455,7 @@ async function loadMe() {
     clientState.addresses = [];
     clientState.selectedAddressId = null;
     clientState.editingAddressId = null;
+    clientState.productEvents = [];
   }
   if (clientState.user) {
     setStoreStatus(`已登录：${clientState.user.displayName || clientState.user.username} · ${clientState.user.role}`);
@@ -2247,9 +2468,11 @@ async function loadMe() {
     clientState.addresses = [];
     clientState.selectedAddressId = null;
     clientState.editingAddressId = null;
+    clientState.productEvents = [];
   }
   renderProfile();
   renderFavorites();
+  renderProductEvents();
 }
 
 async function loadCatalog() {
@@ -2443,7 +2666,7 @@ async function addToCart(productId) {
     method: "POST",
     body: JSON.stringify({ productId, quantity: 1 }),
   });
-  await Promise.all([loadCart(), loadCatalog()]);
+  await Promise.all([loadCart(), loadCatalog(), loadProductEvents()]);
 }
 
 async function updateCartItem(itemId, quantity) {
@@ -2476,7 +2699,7 @@ async function checkout() {
   });
   syncPromotionInput("");
   setStoreStatus("订单已创建，待支付订单会出现在订单列表里");
-  await Promise.all([loadCart(), loadOrders(), loadCatalog()]);
+  await Promise.all([loadCart(), loadOrders(), loadCatalog(), loadProductEvents()]);
 }
 
 async function sendAssistantMessage(message) {
@@ -2614,6 +2837,26 @@ function readReturnNote(orderId) {
   return document.querySelector(`.return-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
+function readInvoiceHeaderType(orderId) {
+  return document.querySelector(`.invoice-header-type-select[data-order-id="${orderId}"]`)?.value?.trim() || "PERSONAL";
+}
+
+function readInvoiceTitle(orderId) {
+  return document.querySelector(`.invoice-title-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readInvoiceTaxNo(orderId) {
+  return document.querySelector(`.invoice-tax-no-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readInvoiceEmail(orderId) {
+  return document.querySelector(`.invoice-email-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readInvoiceNote(orderId) {
+  return document.querySelector(`.invoice-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
 function readReviewRating(orderId, itemId) {
   return Number(document.querySelector(`.review-rating-select[data-order-id="${orderId}"][data-item-id="${itemId}"]`)?.value || 5);
 }
@@ -2671,6 +2914,21 @@ async function submitReturnShipment(orderId) {
   await loadOrders();
 }
 
+async function requestInvoice(orderId) {
+  const updatedOrder = await clientFetchJson(`/api/orders/${orderId}/invoice`, {
+    method: "POST",
+    body: JSON.stringify({
+      headerType: readInvoiceHeaderType(orderId),
+      invoiceTitle: readInvoiceTitle(orderId),
+      taxNo: readInvoiceTaxNo(orderId),
+      email: readInvoiceEmail(orderId),
+      note: readInvoiceNote(orderId),
+    }),
+  });
+  setStoreStatus(`订单 ${updatedOrder.orderNo} 的发票申请已提交`);
+  await loadOrders();
+}
+
 async function submitProductReview(orderId, itemId) {
   const rating = readReviewRating(orderId, itemId);
   const content = readReviewContent(orderId, itemId);
@@ -2689,7 +2947,7 @@ async function bootstrapClient() {
   renderAssistantRuntime();
   await loadMe();
   await loadCatalog();
-  await Promise.all([loadFavorites(), loadAddresses(), loadCart(), loadOrders(), loadSessions(), loadAssistantRuntime()]);
+  await Promise.all([loadFavorites(), loadProductEvents(), loadAddresses(), loadCart(), loadOrders(), loadSessions(), loadAssistantRuntime()]);
   if (window.location.hash === "#assistant") {
     clientById("assistant")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }

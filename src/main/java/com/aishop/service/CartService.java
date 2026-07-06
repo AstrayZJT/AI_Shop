@@ -36,6 +36,7 @@ public class CartService {
     private final OrderTimelineService orderTimelineService;
     private final PromotionService promotionService;
     private final ShippingAddressService shippingAddressService;
+    private final CustomerBehaviorService behaviorService;
 
     public CartService(CartRepository cartRepository,
                        CartItemRepository cartItemRepository,
@@ -45,7 +46,8 @@ public class CartService {
                        OrderService orderService,
                        OrderTimelineService orderTimelineService,
                        PromotionService promotionService,
-                       ShippingAddressService shippingAddressService) {
+                       ShippingAddressService shippingAddressService,
+                       CustomerBehaviorService behaviorService) {
         this.cartRepository = cartRepository;
         this.cartItemRepository = cartItemRepository;
         this.productService = productService;
@@ -55,6 +57,7 @@ public class CartService {
         this.orderTimelineService = orderTimelineService;
         this.promotionService = promotionService;
         this.shippingAddressService = shippingAddressService;
+        this.behaviorService = behaviorService;
     }
 
     @Transactional(readOnly = true)
@@ -88,6 +91,7 @@ public class CartService {
         item.setQuantity(nextQuantity);
         item.setUnitPrice(product.getPrice());
         cartItemRepository.save(item);
+        behaviorService.recordEvent(user, productId, CustomerBehaviorService.EVENT_ADD_TO_CART, "cart-api", null, safeQuantity);
         return toResponse(cart);
     }
 
@@ -168,6 +172,13 @@ public class CartService {
             orderItem.setUnitPrice(product.getPrice());
             orderItem.setLineTotal(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
             orderItemRepository.save(orderItem);
+            behaviorService.recordEvent(
+                    user,
+                    product.getId(),
+                    CustomerBehaviorService.EVENT_CHECKOUT,
+                    "cart-checkout",
+                    order.getOrderNo(),
+                    item.getQuantity());
         }
 
         cart.setCheckedOut(true);

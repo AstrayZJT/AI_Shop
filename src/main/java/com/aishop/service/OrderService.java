@@ -18,6 +18,7 @@ import com.aishop.domain.Product;
 import com.aishop.domain.ShopOrder;
 import com.aishop.dto.OrderDtos.PendingOrderDraftResponse;
 import com.aishop.dto.OrderDtos.OrderDraftResponse;
+import com.aishop.dto.OrderDtos.InvoiceRequest;
 import com.aishop.dto.OrderDtos.OrderItemResponse;
 import com.aishop.dto.OrderDtos.OrderResponse;
 import com.aishop.repository.OrderItemRepository;
@@ -42,6 +43,7 @@ public class OrderService {
     private final ProductService productService;
     private final OrderTimelineService orderTimelineService;
     private final AfterSalesService afterSalesService;
+    private final OrderInvoiceService orderInvoiceService;
 
     public OrderService(ShopOrderRepository orderRepository,
                         OrderItemRepository orderItemRepository,
@@ -50,7 +52,8 @@ public class OrderService {
                         ProductReviewRepository productReviewRepository,
                         ProductService productService,
                         OrderTimelineService orderTimelineService,
-                        AfterSalesService afterSalesService) {
+                        AfterSalesService afterSalesService,
+                        OrderInvoiceService orderInvoiceService) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.draftRepository = draftRepository;
@@ -59,6 +62,7 @@ public class OrderService {
         this.productService = productService;
         this.orderTimelineService = orderTimelineService;
         this.afterSalesService = afterSalesService;
+        this.orderInvoiceService = orderInvoiceService;
     }
 
     @Transactional
@@ -351,6 +355,24 @@ public class OrderService {
         return toResponse(order);
     }
 
+    @Transactional
+    public OrderResponse requestInvoice(AppUser user, Long id, InvoiceRequest request) {
+        ShopOrder order = requireOwnedOrder(user, id);
+        var invoice = orderInvoiceService.requestInvoice(order, request);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户申请发票", invoice.invoiceTitle()));
+        orderRepository.save(order);
+        recordTimelineByActor(
+                order,
+                "用户",
+                "INVOICE_REQUESTED",
+                "发票申请已提交",
+                "发票抬头 %s，接收邮箱 %s。%s".formatted(
+                        invoice.invoiceTitle(),
+                        invoice.email(),
+                        composeOptionalSuffix(invoice.note())));
+        return toResponse(order);
+    }
+
     private DraftPayload parseDraft(String draftJson) {
         var matcher = DRAFT_PATTERN.matcher(draftJson == null ? "" : draftJson);
         if (!matcher.find()) {
@@ -404,7 +426,8 @@ public class OrderService {
                 order.getRiskNote(),
                 items,
                 orderTimelineService.listOrderTimeline(order),
-                afterSalesService.toResponse(order));
+                afterSalesService.toResponse(order),
+                orderInvoiceService.toResponse(order));
     }
 
     private ShopOrder requireOwnedOrder(AppUser user, Long id) {

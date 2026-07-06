@@ -14,6 +14,7 @@ import com.aishop.domain.AfterSalesCase;
 import com.aishop.domain.AppUser;
 import com.aishop.domain.AssistantMessage;
 import com.aishop.domain.AssistantSession;
+import com.aishop.domain.CustomerProductEvent;
 import com.aishop.domain.OrderItem;
 import com.aishop.domain.OrderStatus;
 import com.aishop.domain.PendingOrderDraft;
@@ -29,6 +30,7 @@ import com.aishop.repository.AfterSalesCaseRepository;
 import com.aishop.repository.AppUserRepository;
 import com.aishop.repository.AssistantMessageRepository;
 import com.aishop.repository.AssistantSessionRepository;
+import com.aishop.repository.CustomerProductEventRepository;
 import com.aishop.repository.KnowledgeDocumentRepository;
 import com.aishop.repository.OrderItemRepository;
 import com.aishop.repository.PendingOrderDraftRepository;
@@ -38,7 +40,9 @@ import com.aishop.repository.ProductRepository;
 import com.aishop.repository.ProductReviewRepository;
 import com.aishop.repository.ShopOrderRepository;
 import com.aishop.repository.ShippingAddressRepository;
+import com.aishop.service.CustomerBehaviorService;
 import com.aishop.service.KnowledgeService;
+import com.aishop.service.OrderInvoiceService;
 import com.aishop.service.PromotionService;
 
 @Configuration
@@ -59,6 +63,8 @@ public class DataInitializer {
                                PendingOrderDraftRepository pendingOrderDraftRepository,
                                ProductFavoriteRepository productFavoriteRepository,
                                ShippingAddressRepository shippingAddressRepository,
+                               CustomerProductEventRepository customerProductEventRepository,
+                               OrderInvoiceService orderInvoiceService,
                                PromotionService promotionService) {
         return args -> {
             var encoder = new BCryptPasswordEncoder();
@@ -209,7 +215,9 @@ public class DataInitializer {
                     assistantMessageRepository,
                     pendingOrderDraftRepository,
                     productFavoriteRepository,
-                    shippingAddressRepository);
+                    shippingAddressRepository,
+                    customerProductEventRepository,
+                    orderInvoiceService);
         };
     }
 
@@ -254,7 +262,9 @@ public class DataInitializer {
                                       AssistantMessageRepository assistantMessageRepository,
                                       PendingOrderDraftRepository pendingOrderDraftRepository,
                                       ProductFavoriteRepository productFavoriteRepository,
-                                      ShippingAddressRepository shippingAddressRepository) {
+                                      ShippingAddressRepository shippingAddressRepository,
+                                      CustomerProductEventRepository customerProductEventRepository,
+                                      OrderInvoiceService orderInvoiceService) {
         Product audio = requireProduct(productRepository, "AUDIO-002");
         Product phone = requireProduct(productRepository, "PHONE-001");
         Product tablet = requireProduct(productRepository, "PAD-003");
@@ -266,6 +276,10 @@ public class DataInitializer {
         seedFavorite(productFavoriteRepository, demoUser, tablet);
         seedAddress(shippingAddressRepository, demoUser, "家", "演示用户", "13800000001", "上海市浦东新区演示路 88 号", true);
         seedAddress(shippingAddressRepository, demoUser, "公司", "演示用户", "13800000001", "上海市徐汇区漕溪北路 399 号 12 层", false);
+        seedProductEvent(customerProductEventRepository, demoUser, audio, CustomerBehaviorService.EVENT_VIEW, "demo-seed", "首页推荐区查看", 1);
+        seedProductEvent(customerProductEventRepository, demoUser, tablet, CustomerBehaviorService.EVENT_AI_CONSULT, "demo-seed", "咨询轻办公平板对比", 1);
+        seedProductEvent(customerProductEventRepository, demoUser, phone, CustomerBehaviorService.EVENT_ADD_TO_CART, "demo-seed", "加入购物车后继续比较", 1);
+        seedProductEvent(customerProductEventRepository, demoUser, audio, CustomerBehaviorService.EVENT_CHECKOUT, "demo-seed", "DEMO-ORDER-1001", 1);
 
         SeededOrder completedAudioOrder = seedOrder(
                 orderRepository,
@@ -283,6 +297,19 @@ public class DataInitializer {
                 "顺丰速运",
                 "SF1001001",
                 "演示完成订单，可用于查看评价、时间线和 AI 订单问答。");
+        orderInvoiceService.seedInvoice(
+                completedAudioOrder.order(),
+                OrderInvoiceService.STATUS_ISSUED,
+                OrderInvoiceService.HEADER_COMPANY,
+                "上海星图科技有限公司",
+                "91310000MA1DEMO88X",
+                "finance@demo-shop.cn",
+                "用于企业报销留档",
+                "电子发票已发送至企业邮箱",
+                "INV-DEMO-1001",
+                now.minus(Duration.ofDays(5)),
+                now.minus(Duration.ofDays(4)),
+                now.minus(Duration.ofDays(4)));
         seedReview(
                 productReviewRepository,
                 demoUser,
@@ -317,7 +344,7 @@ public class DataInitializer {
                 4,
                 "拍照和续航都不错，适合日常通勤和临时办公，机身发热控制也还可以。");
 
-        seedOrder(
+        SeededOrder shippedTabletOrder = seedOrder(
                 orderRepository,
                 orderItemRepository,
                 demoUser,
@@ -333,6 +360,19 @@ public class DataInitializer {
                 "中通快递",
                 "ZT1003003",
                 "演示物流在途订单，可用于客户端和 AI 查询配送节点。");
+        orderInvoiceService.seedInvoice(
+                shippedTabletOrder.order(),
+                OrderInvoiceService.STATUS_REQUESTED,
+                OrderInvoiceService.HEADER_PERSONAL,
+                "演示用户",
+                null,
+                "demo@aishop.local",
+                "请发送电子发票到常用邮箱",
+                null,
+                null,
+                now.minus(Duration.ofDays(2)),
+                null,
+                null);
 
         SeededOrder refundOrder = seedOrder(
                 orderRepository,
@@ -473,6 +513,26 @@ public class DataInitializer {
         address.setAddressLine(addressLine);
         address.setDefaultAddress(defaultAddress);
         shippingAddressRepository.save(address);
+    }
+
+    private void seedProductEvent(CustomerProductEventRepository eventRepository,
+                                  AppUser user,
+                                  Product product,
+                                  String eventType,
+                                  String source,
+                                  String detail,
+                                  int quantity) {
+        if (eventRepository.existsByUserAndProductAndEventTypeAndSource(user, product, eventType, source)) {
+            return;
+        }
+        CustomerProductEvent event = new CustomerProductEvent();
+        event.setUser(user);
+        event.setProduct(product);
+        event.setEventType(eventType);
+        event.setSource(source);
+        event.setDetail(detail);
+        event.setQuantity(quantity);
+        eventRepository.save(event);
     }
 
     private SeededOrder seedOrder(ShopOrderRepository orderRepository,

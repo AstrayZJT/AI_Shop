@@ -17,6 +17,7 @@ import com.aishop.dto.OrderDtos.OrderDraftRequest;
 import com.aishop.dto.OrderDtos.OrderDraftResponse;
 import com.aishop.dto.OrderDtos.OrderResponse;
 import com.aishop.dto.OrderDtos.PayOrderRequest;
+import com.aishop.dto.OrderDtos.InvoiceRequest;
 import com.aishop.dto.OrderDtos.ReturnShipmentRequest;
 import com.aishop.dto.OrderDtos.UpdateShippingAddressRequest;
 import com.aishop.dto.ProductDtos.ProductReviewRequest;
@@ -112,6 +113,13 @@ public class OrderController {
                 request.carrier(),
                 request.trackingNo(),
                 request.note());
+    }
+
+    @PostMapping("/api/orders/{id}/invoice")
+    public OrderResponse requestInvoice(HttpSession session,
+                                        @PathVariable Long id,
+                                        @RequestBody InvoiceRequest request) {
+        return orderService.requestInvoice(authService.requireUser(session), id, request);
     }
 
     @PatchMapping("/api/orders/{id}/shipping-address")

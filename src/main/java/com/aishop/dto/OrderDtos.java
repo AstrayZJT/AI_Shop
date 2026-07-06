@@ -35,6 +35,17 @@ public final class OrderDtos {
                                         String detail,
                                         String actorLabel,
                                         Instant occurredAt) {}
+    public record InvoiceResponse(String status,
+                                  String headerType,
+                                  String invoiceTitle,
+                                  String taxNo,
+                                  String email,
+                                  String note,
+                                  String adminReply,
+                                  String invoiceNo,
+                                  Instant requestedAt,
+                                  Instant reviewedAt,
+                                  Instant issuedAt) {}
     public record OrderResponse(Long id,
                                 String orderNo,
                                 String status,
@@ -53,7 +64,8 @@ public final class OrderDtos {
                                 String riskNote,
                                 List<OrderItemResponse> items,
                                 List<OrderTimelineResponse> timeline,
-                                AfterSalesResponse afterSales) {}
+                                AfterSalesResponse afterSales,
+                                InvoiceResponse invoice) {}
     public record OrderDraftRequest(Long productId, Integer quantity, String threadId) {}
     public record OrderDraftResponse(String threadId, String draftJson, String status) {}
     public record PendingOrderDraftResponse(String threadId,
@@ -68,4 +80,10 @@ public final class OrderDtos {
     public record PayOrderRequest(String paymentMethod, String note) {}
     public record UpdateShippingAddressRequest(String shippingAddress, String note) {}
     public record ReturnShipmentRequest(String carrier, String trackingNo, String note) {}
+    public record InvoiceRequest(String headerType,
+                                 String invoiceTitle,
+                                 String taxNo,
+                                 String email,
+                                 String note) {}
+    public record InvoiceReviewRequest(String invoiceNo, String note) {}
 }

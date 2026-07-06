@@ -474,6 +474,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 商品列表、分类、搜索、详情浏览、排序
 - 商品场景化推荐、推荐理由、选品决策区
 - 商品收藏 / 取消收藏，收藏会影响“为你推荐”和 AI 导购上下文
+- 商品行为轨迹：浏览、AI 咨询、加购、结算会沉淀为用户商品足迹，并影响推荐排序和 AI 上下文
 - 从商品卡片快速发起 AI 咨询、同类对比、下单草稿
 - 购物车增删改
 - 购物车结算时可从地址簿选择地址，也可以手动填写本次地址
@@ -512,7 +513,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 售后工作台（待审核、待回寄、待验收、已完成、已驳回）
 - 售后工单按阶段统计、筛选、查看逆向物流和订单时间线
 - 用户列表与客户 360 画像
-- 客户画像聚合累计消费、客单价、地址数量、收藏意向、售后风险、最近订单、AI 会话和下单草稿
+- 客户画像聚合累计消费、客单价、地址数量、收藏意向、近期商品行为、售后风险、最近订单、AI 会话和下单草稿
 - 知识库文档导入与检索
 - 知识库原文查看、分块明细查看、索引状态查看
 - 全量知识索引重建
@@ -650,6 +651,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 购物车：`carts`
 - 购物车项：`cart_items`
 - 商品收藏：`product_favorites`
+- 用户商品行为：`customer_product_events`
 - 订单：`orders`
 - 订单项：`order_items`
 - 营销活动：`promotion_campaigns`
