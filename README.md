@@ -439,7 +439,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - 客户端首页：`http://localhost:8080/`
 - 客户端直达：`http://localhost:8080/client/index.html`
-- 助手入口：`http://localhost:8080/assistant.html`
+- AI 客服直达：`http://localhost:8080/assistant.html`（会自动跳转到客户端 AI 客服区）
 - 管理端：`http://localhost:8080/admin/index.html`
 - 管理端快捷入口：`http://localhost:8080/admin`
 - 客户端快捷入口：`http://localhost:8080/client`
@@ -786,7 +786,7 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - 再进入 `http://localhost:5173/client/index.html`
 - 或者直接进入 `http://localhost:5173/admin/index.html`
 - `/api/*` 会由 Vite 代理到 Spring Boot
-- 后端默认允许 `5173` / `4173` 端口跨域携带 cookie
+- 后端默认允许 `localhost` / `127.0.0.1` 的任意本地开发端口携带 cookie，避免 Vite 自动顺延到 `5174`、`5175` 后登录失效
 - 当前 `frontend/` 工程会优先尝试你手动配置的 `VITE_BACKEND_TARGET`；如果没配，就自动探测本机 `8080` / `8082`
 
 ### 12.2 客户端商品推荐怎么理解

@@ -194,16 +194,20 @@ function preferredDefaultAssistantSession() {
   if (!clientState.sessions.length) {
     return null;
   }
-  const preferred = [...clientState.sessions]
+  const sortedSessions = [...clientState.sessions]
     .sort((left, right) => {
       const byPriority = assistantSessionPriority(left) - assistantSessionPriority(right);
       if (byPriority !== 0) {
         return byPriority;
       }
       return Number(right.id || 0) - Number(left.id || 0);
-    })
-    .find((session) => assistantSessionPriority(session) < 3);
-  return preferred || null;
+    });
+  const preferred = sortedSessions.find((session) => assistantSessionPriority(session) < 3);
+  if (preferred) {
+    return preferred;
+  }
+  const unreadEscalated = sortedSessions.find((session) => Number(session.unreadSupportCount || 0) > 0);
+  return unreadEscalated || sortedSessions[0] || null;
 }
 
 function hasOnlyEscalatedAssistantSessions() {
