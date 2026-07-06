@@ -3,6 +3,7 @@ const adminState = {
   dashboard: null,
   products: [],
   orders: [],
+  reviews: [],
   knowledgeDocs: [],
   knowledgeMatches: [],
   knowledgeSearchKeyword: "",
@@ -1285,12 +1286,24 @@ function renderProducts() {
         <div class="inline-meta">${escapeHtml(product.description || "暂无描述")}</div>
         <div class="tag ${Number(product.stock || 0) <= 5 ? "warning" : ""}">${money(product.price)} · 库存 ${escapeHtml(product.stock)}</div>
       </div>
+      ${renderAdminProductRating(product)}
     </div>
   `).join("");
 
   host.querySelectorAll(".edit-product-btn").forEach((button) => {
     button.addEventListener("click", () => fillProductForm(Number(button.dataset.productId), true));
   });
+}
+
+function renderAdminProductRating(product) {
+  const count = Number(product.reviewCount || 0);
+  if (!count) {
+    return `<div class="inline-meta">暂无评价</div>`;
+  }
+  return `
+    <div class="inline-meta">评分 ${Number(product.averageRating || 0).toFixed(1)} · ${count} 条评价</div>
+    ${product.reviewSummary ? `<div class="panel-hint">${escapeHtml(product.reviewSummary)}</div>` : ""}
+  `;
 }
 
 function renderOrderFilterTabs() {
@@ -1407,6 +1420,38 @@ function renderOrders() {
   host.querySelectorAll(".save-logistics-update-btn").forEach((button) => {
     button.addEventListener("click", () => runAdminAction(() => appendLogisticsUpdate(Number(button.dataset.orderId))));
   });
+}
+
+function renderReviews() {
+  const host = adminById("adminReviewsList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看用户评价。</div>`;
+    return;
+  }
+  if (!adminState.reviews.length) {
+    host.innerHTML = `<div class="empty-state">当前还没有用户评价。用户确认收货后可以在客户端发表评价。</div>`;
+    return;
+  }
+
+  host.innerHTML = adminState.reviews.map((review) => `
+    <article class="review-card">
+      <div class="row-top">
+        <div>
+          <strong>${escapeHtml(review.productName)}</strong>
+          <div class="inline-meta">${escapeHtml(review.productSku || "无 SKU")} · 订单 ${escapeHtml(review.orderNo || "")}</div>
+        </div>
+        <div class="tag success">${escapeHtml(review.rating)} 星</div>
+      </div>
+      <div class="panel-hint">${escapeHtml(review.content || "用户未填写文字评价")}</div>
+      <div class="row-bottom">
+        <div class="inline-meta">用户 ${escapeHtml(review.displayName || review.username || "匿名用户")}</div>
+        <div class="inline-meta">评价时间 ${escapeHtml(formatDateTime(review.createdAt))}</div>
+      </div>
+    </article>
+  `).join("");
 }
 
 function renderAdminOrderControls(order) {
@@ -1736,6 +1781,7 @@ function clearAdminDataState() {
   adminState.dashboard = null;
   adminState.products = [];
   adminState.orders = [];
+  adminState.reviews = [];
   adminState.knowledgeDocs = [];
   adminState.knowledgeMatches = [];
   adminState.knowledgeSearchKeyword = "";
@@ -1759,6 +1805,7 @@ async function loadAdminData() {
     renderProducts();
     renderOrderFilterTabs();
     renderOrders();
+    renderReviews();
     renderAssistantOperations();
     renderKnowledgeDocs();
     renderKnowledgeSearchResults();
@@ -1766,10 +1813,11 @@ async function loadAdminData() {
     return;
   }
 
-  const [dashboard, products, orders, knowledgeDocs, users, assistantSessions, assistantEscalations, assistantDrafts] = await Promise.all([
+  const [dashboard, products, orders, reviews, knowledgeDocs, users, assistantSessions, assistantEscalations, assistantDrafts] = await Promise.all([
     adminFetchJson("/api/admin/dashboard"),
     adminFetchJson("/api/admin/products"),
     adminFetchJson("/api/admin/orders"),
+    adminFetchJson("/api/admin/reviews"),
     adminFetchJson("/api/admin/knowledge/documents"),
     adminFetchJson("/api/admin/users"),
     adminFetchJson("/api/admin/assistant/sessions"),
@@ -1780,6 +1828,7 @@ async function loadAdminData() {
   adminState.dashboard = dashboard;
   adminState.products = products || [];
   adminState.orders = orders || [];
+  adminState.reviews = reviews || [];
   adminState.knowledgeDocs = knowledgeDocs || [];
   adminState.users = users || [];
   adminState.assistantSessions = assistantSessions || [];
@@ -1803,6 +1852,7 @@ async function loadAdminData() {
   renderProducts();
   renderOrderFilterTabs();
   renderOrders();
+  renderReviews();
   renderAssistantOperations();
   renderKnowledgeDocs();
   renderKnowledgeSearchResults();

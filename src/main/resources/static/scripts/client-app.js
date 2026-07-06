@@ -175,6 +175,25 @@ function currency(value) {
   }).format(value || 0);
 }
 
+function ratingLabel(value) {
+  const rating = Number(value || 0);
+  return rating > 0 ? `${rating.toFixed(1)} 星` : "暂无评分";
+}
+
+function renderProductRating(product) {
+  const count = Number(product?.reviewCount || 0);
+  if (!count) {
+    return `<div class="inline-meta">暂无用户评价</div>`;
+  }
+  return `
+    <div class="rating-row">
+      <span class="rating-score">${escapeHtml(ratingLabel(product.averageRating))}</span>
+      <span class="inline-meta">${count} 条评价</span>
+    </div>
+    ${product.reviewSummary ? `<div class="panel-hint">${escapeHtml(product.reviewSummary)}</div>` : ""}
+  `;
+}
+
 function normalizeText(value) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -219,7 +238,7 @@ function recommendationTokens() {
 }
 
 function productSearchPool(product) {
-  return normalizeText([product.name, product.description, product.category, product.sku].join(" "));
+  return normalizeText([product.name, product.description, product.category, product.sku, product.reviewSummary].join(" "));
 }
 
 function productRecommendationScore(product) {
@@ -246,6 +265,8 @@ function productRecommendationScore(product) {
   }
   score += Math.min(Number(product.stock || 0), 20);
   score += Math.max(0, 18 - Math.floor(Number(product.price || 0) / 500));
+  score += Math.min(Number(product.reviewCount || 0), 12);
+  score += Math.round(Number(product.averageRating || 0) * 4);
   return score;
 }
 
@@ -294,6 +315,9 @@ function recommendationReasonTags(product) {
     tags.push("高阶配置");
   } else if (Number(product.price || 0) <= 1500) {
     tags.push("入门友好");
+  }
+  if (Number(product.averageRating || 0) >= 4.6 && Number(product.reviewCount || 0) > 0) {
+    tags.push("口碑较好");
   }
   return Array.from(new Set(tags)).slice(0, 3);
 }
@@ -398,6 +422,7 @@ function renderRecommendationPanel() {
           <div class="tag">${currency(selected.price)}</div>
           <div class="tag">${escapeHtml(Number(selected.stock || 0) > 0 ? `库存 ${selected.stock}` : "暂时缺货")}</div>
         </div>
+        ${renderProductRating(selected)}
         <div class="panel-hint">${escapeHtml(recommendationNarrative(selected))}</div>
         <div class="recommendation-tags">
           ${recommendationReasonTags(selected).map((tag) => `<span class="tag warning">${escapeHtml(tag)}</span>`).join("")}
@@ -441,6 +466,7 @@ function renderRecommendationPanel() {
             <div class="tag">${escapeHtml(product.category || "未分类")}</div>
             <h4>${escapeHtml(product.name)}</h4>
             <div class="inline-meta">${currency(product.price)} · 库存 ${escapeHtml(product.stock)}</div>
+            ${renderProductRating(product)}
             <div class="panel-hint">${escapeHtml(recommendationNarrative(product))}</div>
             <div class="product-actions-compact">
               <button type="button" class="ghost product-select-btn" data-product-id="${product.id}">查看</button>
@@ -476,6 +502,7 @@ function renderProducts() {
         <div class="tag">${escapeHtml(product.category || "未分类")}</div>
         <h3>${escapeHtml(product.name)}</h3>
         <div class="product-meta">${escapeHtml(product.description || "暂无描述")}</div>
+        ${renderProductRating(product)}
         <div class="recommendation-tags">
           ${recommendationReasonTags(product).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}
         </div>
@@ -515,6 +542,9 @@ function productAudienceText(product) {
 }
 
 function productPurchaseHint(product) {
+  if (Number(product.averageRating || 0) >= 4.6 && Number(product.reviewCount || 0) > 0) {
+    return "这件商品近期评价较好，适合优先加入候选清单。";
+  }
   if (Number(product.stock || 0) <= 3) {
     return "库存已经比较紧，适合先加入购物车或让 AI 帮你生成下单草稿。";
   }
@@ -693,9 +723,7 @@ function renderOrders() {
         ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
       </div>
       <div class="order-items">
-        ${(order.items || []).map((item) => `
-          <div>${escapeHtml(item.productName)} x ${item.quantity} · ${currency(item.lineTotal)}</div>
-        `).join("")}
+        ${(order.items || []).map((item) => renderOrderItem(order, item)).join("")}
       </div>
       ${renderOrderTimeline(order)}
       ${renderOrderActionArea(order)}
@@ -710,6 +738,45 @@ function renderOrders() {
   host.querySelectorAll(".after-sales-return-btn").forEach((button) => {
     button.addEventListener("click", () => runClientAction(() => submitReturnShipment(Number(button.dataset.orderId))));
   });
+  host.querySelectorAll(".review-submit-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => submitProductReview(Number(button.dataset.orderId), Number(button.dataset.itemId))));
+  });
+}
+
+function renderOrderItem(order, item) {
+  return `
+    <div class="order-item-card">
+      <div class="row-top">
+        <div>
+          <strong>${escapeHtml(item.productName)}</strong>
+          <div class="inline-meta">${item.productSku ? `SKU ${escapeHtml(item.productSku)} · ` : ""}数量 ${item.quantity} · ${currency(item.lineTotal)}</div>
+        </div>
+        ${item.reviewId ? `<div class="tag success">已评价 ${escapeHtml(item.reviewRating)} 星</div>` : ""}
+      </div>
+      ${item.reviewId ? `<div class="panel-hint">我的评价：${escapeHtml(item.reviewContent || "")}</div>` : ""}
+      ${renderReviewForm(order, item)}
+    </div>
+  `;
+}
+
+function renderReviewForm(order, item) {
+  if (order.status !== "COMPLETED" || !item.id) {
+    return "";
+  }
+  const currentRating = Number(item.reviewRating || 5);
+  return `
+    <div class="review-form">
+      <select class="review-rating-select" data-order-id="${order.id}" data-item-id="${item.id}">
+        ${[5, 4, 3, 2, 1].map((rating) => `<option value="${rating}" ${rating === currentRating ? "selected" : ""}>${rating} 星</option>`).join("")}
+      </select>
+      <textarea class="review-content-input" data-order-id="${order.id}" data-item-id="${item.id}" placeholder="写下这件商品的真实使用感受，后续 AI 推荐也会参考这些口碑">${escapeHtml(item.reviewContent || "")}</textarea>
+      <div class="order-actions">
+        <button type="button" class="secondary review-submit-btn" data-order-id="${order.id}" data-item-id="${item.id}">
+          ${item.reviewId ? "更新评价" : "发表评价"}
+        </button>
+      </div>
+    </div>
+  `;
 }
 
 function renderOrderActionArea(order) {
@@ -1417,6 +1484,14 @@ function readReturnNote(orderId) {
   return document.querySelector(`.return-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
+function readReviewRating(orderId, itemId) {
+  return Number(document.querySelector(`.review-rating-select[data-order-id="${orderId}"][data-item-id="${itemId}"]`)?.value || 5);
+}
+
+function readReviewContent(orderId, itemId) {
+  return document.querySelector(`.review-content-input[data-order-id="${orderId}"][data-item-id="${itemId}"]`)?.value?.trim() || "";
+}
+
 async function performOrderAction(orderId, action) {
   let url = "";
   let options = { method: "PATCH" };
@@ -1464,6 +1539,20 @@ async function submitReturnShipment(orderId) {
   });
   setStoreStatus(`订单 ${updatedOrder.orderNo} 的回寄物流已提交，等待平台确认收货退款`);
   await loadOrders();
+}
+
+async function submitProductReview(orderId, itemId) {
+  const rating = readReviewRating(orderId, itemId);
+  const content = readReviewContent(orderId, itemId);
+  if (!content) {
+    throw new Error("请先填写评价内容");
+  }
+  const review = await clientFetchJson(`/api/orders/${orderId}/items/${itemId}/review`, {
+    method: "POST",
+    body: JSON.stringify({ rating, content }),
+  });
+  setStoreStatus(`已提交 ${review.productName} 的 ${review.rating} 星评价`);
+  await Promise.all([loadOrders(), loadCatalog()]);
 }
 
 async function bootstrapClient() {

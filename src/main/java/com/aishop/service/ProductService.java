@@ -22,10 +22,14 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final ProductCategoryRepository categoryRepository;
+    private final ProductReviewService productReviewService;
 
-    public ProductService(ProductRepository productRepository, ProductCategoryRepository categoryRepository) {
+    public ProductService(ProductRepository productRepository,
+                          ProductCategoryRepository categoryRepository,
+                          ProductReviewService productReviewService) {
         this.productRepository = productRepository;
         this.categoryRepository = categoryRepository;
+        this.productReviewService = productReviewService;
     }
 
     @Transactional(readOnly = true)
@@ -122,14 +126,18 @@ public class ProductService {
                 product.getPrice(),
                 product.getStock(),
                 product.getImageUrl(),
-                product.getCategory() == null ? null : product.getCategory().getName());
+                product.getCategory() == null ? null : product.getCategory().getName(),
+                productReviewService.averageRating(product),
+                productReviewService.reviewCount(product),
+                productReviewService.reviewSummary(product));
     }
 
     private int scoreProduct(Product product, String normalizedKeyword, List<String> tokens) {
         String name = normalize(product.getName());
         String description = normalize(product.getDescription());
         String category = normalize(product.getCategory() == null ? null : product.getCategory().getName());
-        String combined = name + " " + description + " " + category;
+        String reviews = normalize(productReviewService.reviewSummary(product));
+        String combined = name + " " + description + " " + category + " " + reviews;
 
         int score = 0;
         if (!normalizedKeyword.isBlank()) {
@@ -153,6 +161,14 @@ public class ProductService {
             if (category.contains(token)) {
                 score += 18 + token.length() * 5;
             }
+            if (reviews.contains(token)) {
+                score += 14 + token.length() * 4;
+            }
+        }
+        long reviewCount = productReviewService.reviewCount(product);
+        Double averageRating = productReviewService.averageRating(product);
+        if ((normalizedKeyword.contains("口碑") || normalizedKeyword.contains("评价")) && reviewCount > 0) {
+            score += 32 + (averageRating == null ? 0 : (int) Math.round(averageRating * 8));
         }
         return score;
     }

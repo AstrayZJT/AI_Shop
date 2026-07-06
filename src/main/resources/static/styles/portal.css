@@ -443,6 +443,18 @@ textarea {
   color: var(--info);
 }
 
+.rating-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.rating-score {
+  font-weight: 800;
+  color: var(--primary-strong);
+}
+
 .status-chip {
   display: inline-flex;
   align-items: center;
@@ -665,6 +677,30 @@ textarea {
   color: var(--muted);
 }
 
+.order-item-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+}
+
+.review-form {
+  display: grid;
+  gap: 10px;
+}
+
+.review-form textarea {
+  min-height: 78px;
+  background: var(--surface);
+}
+
+.review-form select {
+  background: var(--surface);
+}
+
 .order-summary,
 .order-action-block,
 .knowledge-search-block {
@@ -808,6 +844,22 @@ textarea {
 
 .after-sales-summary-grid {
   margin-bottom: 14px;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.review-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.07);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
 }
 
 .after-sales-case-grid {
@@ -1054,6 +1106,7 @@ textarea {
   .product-grid,
   .orders-grid,
   .metric-grid,
+  .review-grid,
   .shipment-grid,
   .after-sales-case-grid,
   .recommendation-mini-grid {

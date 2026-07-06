@@ -22,6 +22,8 @@ import com.aishop.dto.OrderDtos.OrderItemResponse;
 import com.aishop.dto.OrderDtos.OrderResponse;
 import com.aishop.repository.OrderItemRepository;
 import com.aishop.repository.PendingOrderDraftRepository;
+import com.aishop.repository.ProductRepository;
+import com.aishop.repository.ProductReviewRepository;
 import com.aishop.repository.ShopOrderRepository;
 
 @Service
@@ -35,6 +37,8 @@ public class OrderService {
     private final ShopOrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final PendingOrderDraftRepository draftRepository;
+    private final ProductRepository productRepository;
+    private final ProductReviewRepository productReviewRepository;
     private final ProductService productService;
     private final OrderTimelineService orderTimelineService;
     private final AfterSalesService afterSalesService;
@@ -42,12 +46,16 @@ public class OrderService {
     public OrderService(ShopOrderRepository orderRepository,
                         OrderItemRepository orderItemRepository,
                         PendingOrderDraftRepository draftRepository,
+                        ProductRepository productRepository,
+                        ProductReviewRepository productReviewRepository,
                         ProductService productService,
                         OrderTimelineService orderTimelineService,
                         AfterSalesService afterSalesService) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.draftRepository = draftRepository;
+        this.productRepository = productRepository;
+        this.productReviewRepository = productReviewRepository;
         this.productService = productService;
         this.orderTimelineService = orderTimelineService;
         this.afterSalesService = afterSalesService;
@@ -359,7 +367,23 @@ public class OrderService {
 
     public OrderResponse toResponse(ShopOrder order) {
         var items = orderItemRepository.findByOrder(order).stream()
-                .map(item -> new OrderItemResponse(item.getProductName(), item.getQuantity(), item.getUnitPrice(), item.getLineTotal()))
+                .map(item -> {
+                    Product product = item.getProductSku() == null
+                            ? null
+                            : productRepository.findBySku(item.getProductSku()).orElse(null);
+                    var review = productReviewRepository.findByOrderItemAndUser(item, order.getUser()).orElse(null);
+                    return new OrderItemResponse(
+                            item.getId(),
+                            product == null ? null : product.getId(),
+                            item.getProductSku(),
+                            item.getProductName(),
+                            item.getQuantity(),
+                            item.getUnitPrice(),
+                            item.getLineTotal(),
+                            review == null ? null : review.getId(),
+                            review == null ? null : review.getRating(),
+                            review == null ? null : review.getContent());
+                })
                 .toList();
         return new OrderResponse(
                 order.getId(),

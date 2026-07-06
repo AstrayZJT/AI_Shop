@@ -8,7 +8,16 @@ public final class OrderDtos {
     private OrderDtos() {
     }
 
-    public record OrderItemResponse(String productName, Integer quantity, BigDecimal unitPrice, BigDecimal lineTotal) {}
+    public record OrderItemResponse(Long id,
+                                    Long productId,
+                                    String productSku,
+                                    String productName,
+                                    Integer quantity,
+                                    BigDecimal unitPrice,
+                                    BigDecimal lineTotal,
+                                    Long reviewId,
+                                    Integer reviewRating,
+                                    String reviewContent) {}
     public record AfterSalesResponse(String status,
                                      String customerReason,
                                      String adminReply,

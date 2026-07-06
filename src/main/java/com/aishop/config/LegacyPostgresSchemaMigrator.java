@@ -30,6 +30,7 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
             "orders",
             "pending_order_drafts",
             "product_categories",
+            "product_reviews",
             "products");
 
     private final DataSource dataSource;

@@ -278,8 +278,12 @@ public class AssistantService {
         if ("product".equals(intent) && !matchedProducts.isEmpty()) {
             if (matchedProducts.size() == 1) {
                 var product = matchedProducts.get(0);
-                return "我先给你推荐这款商品：%s，价格 %s。%s"
-                        .formatted(product.name(), product.price(), product.description());
+                return "我先给你推荐这款商品：%s，价格 %s。%s%s"
+                        .formatted(
+                                product.name(),
+                                product.price(),
+                                product.description(),
+                                productReviewSnippet(product));
             }
             return "我帮你筛了几款更相关的商品：" + formatProducts(matchedProducts);
         }
@@ -1162,9 +1166,25 @@ public class AssistantService {
 
     private String formatProducts(List<ProductResponse> products) {
         return products.stream()
-                .map(product -> "%s(%s, 库存%s)".formatted(product.name(), product.price(), product.stock()))
+                .map(product -> "%s(%s, 库存%s%s)".formatted(
+                        product.name(),
+                        product.price(),
+                        product.stock(),
+                        productReviewSnippet(product)))
                 .reduce((left, right) -> left + " | " + right)
                 .orElse("无");
+    }
+
+    private String productReviewSnippet(ProductResponse product) {
+        long reviewCount = product.reviewCount() == null ? 0L : product.reviewCount();
+        if (reviewCount <= 0) {
+            return "";
+        }
+        String rating = product.averageRating() == null ? "暂无评分" : product.averageRating() + "星";
+        String summary = product.reviewSummary() == null || product.reviewSummary().isBlank()
+                ? ""
+                : "，口碑：" + trim(product.reviewSummary(), 60);
+        return "，评分%s，评价%s条%s".formatted(rating, reviewCount, summary);
     }
 
     private String formatOrders(List<OrderResponse> orders) {

@@ -339,6 +339,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 发货前修改收货地址
 - 用户侧取消订单
 - 用户侧确认收货
+- 已完成订单商品评价
 - 用户侧申请退款
 - 用户侧提交回寄物流
 - AI 客服对话
@@ -347,6 +348,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - 仪表盘数据总览
 - 商品新增 / 编辑
+- 商品评分和用户评价查看
 - 待支付订单查看
 - 后台补记支付并推进到待发货
 - 订单状态推进
@@ -374,7 +376,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 当前 AI 客服已经能处理这些常见场景：
 
 - 商品推荐
-- 商品详情咨询、同类对比和下单草稿快捷引导
+- 商品详情咨询、同类对比、评价口碑参考和下单草稿快捷引导
 - 查询最近订单
 - 查询具体订单状态、物流、地址、最新履约进度
 - 读取最新物流节点并结合订单状态解释下一步
@@ -518,6 +520,7 @@ AI 会话新增了 `service_status` 字段，用于区分：
 
 - `GET /api/products`
 - `GET /api/products/{id}`
+- `GET /api/products/{id}/reviews`
 - `GET /api/products/search`
 - `GET /api/categories`
 - `GET /api/cart`
@@ -539,6 +542,7 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - `PATCH /api/orders/{id}/confirm-receipt`
 - `PATCH /api/orders/{id}/refund`
 - `PATCH /api/orders/{id}/shipping-address`
+- `POST /api/orders/{orderId}/items/{itemId}/review`
 
 ### 11.4 AI 客服
 
@@ -562,6 +566,7 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - `GET /api/admin/knowledge/search`
 - `POST /api/admin/knowledge/import`
 - `GET /api/admin/users`
+- `GET /api/admin/reviews`
 - `GET /api/admin/assistant/sessions`
 - `GET /api/admin/assistant/escalations`
 - `GET /api/admin/assistant/sessions/{id}/messages`
@@ -645,6 +650,7 @@ mvn -q -DskipTests compile
 - 本地 embedding：`src/main/java/com/aishop/config/LocalEmbeddingConfig.java`
 - 前端跨域与分离开发支持：`src/main/java/com/aishop/config/FrontendCorsConfig.java`
 - AI 客服主逻辑：`src/main/java/com/aishop/service/AssistantService.java`
+- 商品评价与口碑：`src/main/java/com/aishop/service/ProductReviewService.java`
 - 管理端客服接管：`src/main/java/com/aishop/service/AdminService.java`
 - RAG 导入与检索：`src/main/java/com/aishop/service/KnowledgeService.java`
 - 向量索引同步：`src/main/java/com/aishop/service/KnowledgeIndexSynchronizer.java`

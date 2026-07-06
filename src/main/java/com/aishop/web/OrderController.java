@@ -19,8 +19,11 @@ import com.aishop.dto.OrderDtos.OrderResponse;
 import com.aishop.dto.OrderDtos.PayOrderRequest;
 import com.aishop.dto.OrderDtos.ReturnShipmentRequest;
 import com.aishop.dto.OrderDtos.UpdateShippingAddressRequest;
+import com.aishop.dto.ProductDtos.ProductReviewRequest;
+import com.aishop.dto.ProductDtos.ProductReviewResponse;
 import com.aishop.service.AuthService;
 import com.aishop.service.OrderService;
+import com.aishop.service.ProductReviewService;
 
 import jakarta.servlet.http.HttpSession;
 
@@ -29,10 +32,14 @@ public class OrderController {
 
     private final AuthService authService;
     private final OrderService orderService;
+    private final ProductReviewService productReviewService;
 
-    public OrderController(AuthService authService, OrderService orderService) {
+    public OrderController(AuthService authService,
+                           OrderService orderService,
+                           ProductReviewService productReviewService) {
         this.authService = authService;
         this.orderService = orderService;
+        this.productReviewService = productReviewService;
     }
 
     @GetMapping("/api/orders")
@@ -116,5 +123,13 @@ public class OrderController {
                 id,
                 request.shippingAddress(),
                 request.note());
+    }
+
+    @PostMapping("/api/orders/{orderId}/items/{itemId}/review")
+    public ProductReviewResponse reviewOrderItem(HttpSession session,
+                                                 @PathVariable Long orderId,
+                                                 @PathVariable Long itemId,
+                                                 @RequestBody ProductReviewRequest request) {
+        return productReviewService.reviewOrderItem(authService.requireUser(session), orderId, itemId, request);
     }
 }

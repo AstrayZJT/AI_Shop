@@ -28,9 +28,11 @@ import com.aishop.dto.AdminDtos.ReturnInstructionRequest;
 import com.aishop.dto.AdminDtos.UpdateOrderStatusRequest;
 import com.aishop.dto.KnowledgeDtos.ImportRequest;
 import com.aishop.dto.ProductDtos.ProductResponse;
+import com.aishop.dto.ProductDtos.ProductReviewResponse;
 import com.aishop.service.AdminService;
 import com.aishop.service.AuthService;
 import com.aishop.service.KnowledgeService;
+import com.aishop.service.ProductReviewService;
 
 import jakarta.servlet.http.HttpSession;
 
@@ -40,13 +42,16 @@ public class AdminController {
     private final AuthService authService;
     private final AdminService adminService;
     private final KnowledgeService knowledgeService;
+    private final ProductReviewService productReviewService;
 
     public AdminController(AuthService authService,
                            AdminService adminService,
-                           KnowledgeService knowledgeService) {
+                           KnowledgeService knowledgeService,
+                           ProductReviewService productReviewService) {
         this.authService = authService;
         this.adminService = adminService;
         this.knowledgeService = knowledgeService;
+        this.productReviewService = productReviewService;
     }
 
     @GetMapping("/api/admin/dashboard")
@@ -143,6 +148,12 @@ public class AdminController {
     public List<AdminUserResponse> users(HttpSession session) {
         authService.requireAdmin(session);
         return adminService.listUsers();
+    }
+
+    @GetMapping("/api/admin/reviews")
+    public List<ProductReviewResponse> reviews(HttpSession session) {
+        authService.requireAdmin(session);
+        return productReviewService.listRecentReviews();
     }
 
     @GetMapping("/api/admin/assistant/sessions")
