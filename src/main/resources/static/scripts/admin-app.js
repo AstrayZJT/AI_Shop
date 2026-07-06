@@ -247,6 +247,108 @@ function assistantOwnerLabel(session) {
   return session.assignedAdminDisplayName || session.assignedAdminUsername || "未认领";
 }
 
+function assistantSessionUserProfile(session) {
+  if (!session?.username) {
+    return null;
+  }
+  return adminState.users.find((user) => user.username === session.username) || null;
+}
+
+function assistantSessionPendingDraft(session) {
+  if (!session?.threadId) {
+    return null;
+  }
+  return adminState.assistantDrafts.find((draft) => draft.threadId === session.threadId && draft.status === "PENDING_CONFIRMATION") || null;
+}
+
+function assistantSessionRecentOrders(session) {
+  if (!session?.username) {
+    return [];
+  }
+  return adminState.orders
+    .filter((order) => order.username === session.username)
+    .slice(0, 3);
+}
+
+function renderAssistantContextUserCard(session) {
+  const user = assistantSessionUserProfile(session);
+  if (!user) {
+    return `
+      <article class="assistant-context-card">
+        <div class="assistant-context-title">用户资料</div>
+        <div class="panel-hint">当前还没有同步到用户资料，先查看会话和订单记录。</div>
+      </article>
+    `;
+  }
+  return `
+    <article class="assistant-context-card">
+      <div class="assistant-context-title">用户资料</div>
+      <div class="assistant-context-list">
+        <div class="inline-meta">昵称 ${escapeHtml(user.displayName || user.username)}</div>
+        <div class="inline-meta">账号 ${escapeHtml(user.username)}</div>
+        <div class="inline-meta">电话 ${escapeHtml(user.phone || "未填写")}</div>
+        <div class="inline-meta">默认地址 ${escapeHtml(user.shippingAddress || "未填写")}</div>
+        <div class="inline-meta">偏好 ${escapeHtml(user.preferencesSummary || "未填写偏好")}</div>
+      </div>
+    </article>
+  `;
+}
+
+function renderAssistantContextDraftCard(session) {
+  const draft = assistantSessionPendingDraft(session);
+  if (!draft) {
+    return `
+      <article class="assistant-context-card">
+        <div class="assistant-context-title">AI 下单草稿</div>
+        <div class="panel-hint">当前会话没有待确认草稿，客服可以继续引导用户选品、下单或处理订单问题。</div>
+      </article>
+    `;
+  }
+  return `
+    <article class="assistant-context-card">
+      <div class="assistant-context-title">AI 下单草稿</div>
+      <div class="assistant-context-list">
+        <div class="inline-meta">商品 ${escapeHtml(draft.productName || "未知商品")}</div>
+        <div class="inline-meta">数量 ${escapeHtml(draft.quantity || 0)} · 单价 ${money(draft.unitPrice || 0)} · 合计 ${money(draft.totalAmount || 0)}</div>
+        <div class="inline-meta">状态 ${escapeHtml(draft.status || "PENDING_CONFIRMATION")}</div>
+        <div class="panel-hint">${escapeHtml(draft.note || "客服可结合商品、优惠和库存继续推动转化。")}</div>
+      </div>
+    </article>
+  `;
+}
+
+function renderAssistantContextOrders(session) {
+  const orders = assistantSessionRecentOrders(session);
+  if (!orders.length) {
+    return `
+      <article class="assistant-context-card">
+        <div class="assistant-context-title">最近订单</div>
+        <div class="panel-hint">该用户当前还没有订单，优先结合商品推荐、优惠活动和草稿转化继续沟通。</div>
+      </article>
+    `;
+  }
+  return `
+    <article class="assistant-context-card">
+      <div class="assistant-context-title">最近订单</div>
+      <div class="assistant-order-mini-list">
+        ${orders.map((order) => `
+          <div class="assistant-order-mini">
+            <div class="row-top">
+              <strong>${escapeHtml(order.orderNo)}</strong>
+              <div class="tag">${escapeHtml(statusLabel(order.status))}</div>
+            </div>
+            <div class="inline-meta">${money(order.totalAmount || 0)}${order.promotionTitle ? ` · ${escapeHtml(order.promotionTitle)}` : ""}</div>
+            <div class="inline-meta">${escapeHtml(order.shippingAddress || "未填写地址")}</div>
+            <div class="order-actions">
+              <button type="button" class="ghost ops-focus-order-btn" data-order-no="${escapeHtml(order.orderNo)}" data-order-filter="${escapeHtml(order.status || "ALL")}">定位订单</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
 function formatElapsedLabel(value) {
   if (!value) {
     return "时间未知";
@@ -1201,7 +1303,13 @@ function renderAssistantSessionDetail() {
     <div><strong>最近客户消息：</strong>${escapeHtml(formatDateTime(session.lastCustomerMessageAt))} · <strong>等待：</strong>${escapeHtml(assistantWaitingLabel(session))}</div>
     <div><strong>认领时间：</strong>${escapeHtml(formatDateTime(session.assignedAt))} · <strong>首响：</strong>${escapeHtml(formatDateTime(session.firstSupportReplyAt))} · <strong>结案：</strong>${escapeHtml(formatDateTime(session.resolvedAt))}</div>
     <div><strong>摘要：</strong>${escapeHtml(session.summary || "暂无摘要")}</div>
+    <div class="assistant-context-grid">
+      ${renderAssistantContextUserCard(session)}
+      ${renderAssistantContextDraftCard(session)}
+      ${renderAssistantContextOrders(session)}
+    </div>
   `;
+  bindFocusOrderButtons(meta);
   if (!adminState.assistantMessages.length) {
     host.innerHTML = `<div class="empty-state">当前会话还没有消息。</div>`;
     return;

@@ -95,6 +95,7 @@ public final class AdminDtos {
                                     String role,
                                     String phone,
                                     String shippingAddress,
+                                    String preferencesSummary,
                                     Instant createdAt) {}
 
     public record AdminAssistantSessionResponse(Long id,

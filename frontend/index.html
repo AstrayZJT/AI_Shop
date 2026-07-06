@@ -2,11 +2,247 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="0; url=/client/index.html">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Shop Frontend</title>
+  <title>AI Shop 分离前端工作台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles/portal.css">
+  <style>
+    .frontend-shell {
+      min-height: 100vh;
+    }
+
+    .frontend-main-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .frontend-entry-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .frontend-card {
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.07);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .frontend-card h2,
+    .frontend-card h3 {
+      margin: 0;
+    }
+
+    .frontend-card p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .frontend-list,
+    .frontend-meta-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .frontend-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .frontend-actions .button-like {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .frontend-runtime-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .frontend-runtime-card {
+      display: grid;
+      gap: 4px;
+      padding: 12px;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.78);
+    }
+
+    .frontend-runtime-card span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .frontend-runtime-card strong {
+      font-size: 15px;
+      color: var(--text);
+    }
+
+    .frontend-note {
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(15, 118, 110, 0.08);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .frontend-note.warning {
+      background: rgba(194, 65, 12, 0.1);
+      color: var(--accent);
+    }
+
+    .frontend-note code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    @media (max-width: 960px) {
+      .frontend-main-grid,
+      .frontend-entry-grid,
+      .frontend-runtime-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
 </head>
-<body>
-  <p>Redirecting to <a href="/client/index.html">/client/index.html</a>...</p>
+<body class="portal-body frontend-shell">
+  <main>
+    <section class="band masthead-band">
+      <div class="container frontend-main-grid">
+        <section class="panel">
+          <div class="brand-copy">
+            <span class="eyebrow">AI Commerce Frontend</span>
+            <h1>AI Shop 分离前端工作台</h1>
+            <p>这个入口专门给独立前端开发模式使用。客户端、管理端和 AI 运行态都从这里进入，不需要先依赖 Spring 托管静态页。</p>
+          </div>
+        </section>
+
+        <aside class="auth-box">
+          <div id="frontendBackendStatus" class="status-chip">正在检测后端代理</div>
+          <div class="frontend-meta-list">
+            <div class="inline-meta">当前页面由 Vite 提供，静态资源直接复用 Spring 项目里的共享页面和脚本。</div>
+            <div class="inline-meta">若你没显式配置 <code>VITE_BACKEND_TARGET</code>，Vite 会自动探测本机 <code>8080</code> 和 <code>8082</code>。</div>
+          </div>
+          <div class="frontend-actions">
+            <a class="button-like primary" href="/client/index.html">打开客户端</a>
+            <a class="button-like secondary" href="/admin/index.html">打开管理端</a>
+            <a class="button-like ghost" href="/client/index.html#assistant">直达 AI 客服</a>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="container frontend-entry-grid">
+        <article class="frontend-card">
+          <div class="row-top">
+            <div>
+              <h2>客户端</h2>
+              <p>面向用户的商品浏览、购物车、订单、售后和 AI 客服入口。</p>
+            </div>
+            <div class="tag">/client/index.html</div>
+          </div>
+          <div class="frontend-list">
+            <div class="inline-meta">默认账号：<strong>demo / demo123</strong></div>
+            <div class="inline-meta">登录 scope：customer</div>
+            <div class="inline-meta">支持商品推荐、下单草稿、订单查询、退款和物流问答</div>
+          </div>
+          <div class="frontend-actions">
+            <a class="button-like primary" href="/client/index.html">进入客户端</a>
+            <a class="button-like ghost" href="/client/index.html#assistant">打开 AI 客服区</a>
+          </div>
+        </article>
+
+        <article class="frontend-card">
+          <div class="row-top">
+            <div>
+              <h2>管理端</h2>
+              <p>面向运营和客服的后台入口，处理商品、订单、知识库和 AI 会话。</p>
+            </div>
+            <div class="tag">/admin/index.html</div>
+          </div>
+          <div class="frontend-list">
+            <div class="inline-meta">默认账号：<strong>admin / admin123</strong></div>
+            <div class="inline-meta">登录 scope：admin</div>
+            <div class="inline-meta">支持售后工位、知识库导入、AI 会话接管和运行态查看</div>
+          </div>
+          <div class="frontend-actions">
+            <a class="button-like secondary" href="/admin/index.html">进入管理端</a>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="band muted-band">
+      <div class="container frontend-main-grid">
+        <section class="frontend-card">
+          <div class="section-head compact">
+            <div>
+              <h2>当前连接状态</h2>
+              <p>这里读取的是当前前端实际连到的后端，不是写死说明。</p>
+            </div>
+          </div>
+
+          <div class="frontend-runtime-grid">
+            <div class="frontend-runtime-card">
+              <span>AI 模式</span>
+              <strong id="runtimeModeValue">检测中</strong>
+            </div>
+            <div class="frontend-runtime-card">
+              <span>向量存储</span>
+              <strong id="runtimeVectorValue">检测中</strong>
+            </div>
+            <div class="frontend-runtime-card">
+              <span>聊天模型</span>
+              <strong id="runtimeChatValue">检测中</strong>
+            </div>
+            <div class="frontend-runtime-card">
+              <span>知识文档</span>
+              <strong id="runtimeDocsValue">检测中</strong>
+            </div>
+            <div class="frontend-runtime-card">
+              <span>商品接口</span>
+              <strong id="productCountValue">检测中</strong>
+            </div>
+            <div class="frontend-runtime-card">
+              <span>登录态</span>
+              <strong id="sessionSummaryValue">检测中</strong>
+            </div>
+          </div>
+
+          <div id="frontendRuntimeNote" class="frontend-note">正在读取 /api/assistant/health 和基础业务接口。</div>
+        </section>
+
+        <aside class="frontend-card">
+          <div class="section-head compact">
+            <div>
+              <h2>分离模式启动提示</h2>
+              <p>这页只关心独立前端模式，不替代 README。</p>
+            </div>
+          </div>
+
+          <div class="frontend-list">
+            <div class="inline-meta">1. 先启动 Spring Boot API。</div>
+            <div class="inline-meta">2. 再在 <code>frontend/</code> 目录运行 <code>npm run dev</code>。</div>
+            <div class="inline-meta">3. 若后端跑在非默认端口，在 <code>frontend/.env</code> 中设置 <code>VITE_BACKEND_TARGET</code>。</div>
+            <div class="inline-meta">4. 真模型模式下，再额外设置 <code>SHOP_AI_ENABLED=true</code> 和 <code>OPENAI_API_KEY</code>。</div>
+          </div>
+
+          <div id="frontendSessionNote" class="frontend-note">客户端与管理端登录态是分 scope 保存的，所以同浏览器里可以同时登录 demo 和 admin。</div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/workspace.js"></script>
 </body>
 </html>

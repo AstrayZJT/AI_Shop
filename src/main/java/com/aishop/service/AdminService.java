@@ -533,6 +533,7 @@ public class AdminService {
                 user.getRole().name(),
                 user.getPhone(),
                 user.getShippingAddress(),
+                user.getPreferencesSummary(),
                 user.getCreatedAt());
     }
 

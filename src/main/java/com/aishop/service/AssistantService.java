@@ -2,6 +2,8 @@ package com.aishop.service;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
@@ -23,6 +25,9 @@ import com.aishop.dto.PromotionDtos.PromotionResponse;
 import com.aishop.dto.OrderDtos.OrderResponse;
 import com.aishop.dto.ProductDtos.ProductResponse;
 import com.aishop.dto.AssistantDtos.ChatResponse;
+import com.aishop.dto.AssistantDtos.KnowledgeSourceResponse;
+import com.aishop.dto.AssistantDtos.SuggestedActionResponse;
+import com.aishop.dto.KnowledgeDtos.SearchResponse;
 import com.aishop.repository.AssistantMessageRepository;
 import com.aishop.repository.AssistantSessionRepository;
 
@@ -145,9 +150,14 @@ public class AssistantService {
         var recentOrders = allOrders.stream().limit(3).toList();
         var exactOrder = findExactMentionedOrder(message, allOrders);
         int requestedQuantity = extractRequestedQuantity(message);
-        var sources = knowledgeService.search(message).stream()
-                .map(s -> s.title() + ": " + s.chunkText())
+        var knowledgeHits = knowledgeService.search(message).stream()
                 .limit(3)
+                .toList();
+        var sourceTexts = knowledgeHits.stream()
+                .map(s -> s.title() + ": " + s.chunkText())
+                .toList();
+        var sources = knowledgeHits.stream()
+                .map(this::toKnowledgeSourceResponse)
                 .toList();
         log.info("assistant context: sessionId={}, intent={}, sourceCount={}",
                 session.getId(), intent, sources.size());
@@ -158,11 +168,12 @@ public class AssistantService {
         }
 
         var answer = actionExecution == null
-                ? buildPendingHandoffAnswer(session, user, intent, sources, matchedProducts, recentOrders, exactOrder, message, currentThreadId)
+                ? buildPendingHandoffAnswer(session, user, intent, sourceTexts, matchedProducts, recentOrders, exactOrder, message, currentThreadId)
                 : actionExecution.answer();
         var draftJson = actionExecution == null && !SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))
                 ? buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts, requestedQuantity)
                 : null;
+        var suggestedActions = buildSuggestedActions(session, intent, message, matchedProducts, recentOrders, exactOrder, draftJson, knowledgeHits);
         log.info("assistant response: sessionId={}, intent={}, draftCreated={}, answer={}",
                 session.getId(), intent, draftJson != null, preview(answer));
 
@@ -173,7 +184,7 @@ public class AssistantService {
         saveMessage(session, "user", message);
         saveMessage(session, "assistant", answer);
 
-        return new ChatResponse(session.getId(), answer, intent, currentThreadId, sources, draftJson);
+        return new ChatResponse(session.getId(), answer, intent, currentThreadId, sources, draftJson, suggestedActions);
     }
 
     @Transactional
@@ -497,6 +508,150 @@ public class AssistantService {
             return null;
         }
         return orderService.buildDraft(user, product.id(), requestedQuantity, threadId).draftJson();
+    }
+
+    private KnowledgeSourceResponse toKnowledgeSourceResponse(SearchResponse response) {
+        return new KnowledgeSourceResponse(
+                response.id(),
+                response.documentId(),
+                response.title(),
+                trim(response.chunkText(), 220));
+    }
+
+    private List<SuggestedActionResponse> buildSuggestedActions(AssistantSession session,
+                                                                String intent,
+                                                                String message,
+                                                                List<ProductResponse> matchedProducts,
+                                                                List<OrderResponse> recentOrders,
+                                                                OrderResponse exactOrder,
+                                                                String draftJson,
+                                                                List<SearchResponse> knowledgeHits) {
+        LinkedHashMap<String, SuggestedActionResponse> actions = new LinkedHashMap<>();
+        OrderResponse focusOrder = findMentionedOrder(message, recentOrders, exactOrder);
+        String serviceStatus = normalizeServiceStatus(session.getServiceStatus());
+
+        if (draftJson != null) {
+            addSuggestedAction(actions, "draft-review", "继续确认下单草稿", "帮我再确认一下当前下单草稿信息", "order");
+        }
+
+        switch (intent) {
+            case "order", "order_action" -> appendOrderActions(actions, focusOrder, recentOrders, matchedProducts, message);
+            case "product" -> appendProductActions(actions, matchedProducts);
+            case "promotion" -> appendPromotionActions(actions, matchedProducts);
+            case "after_sales" -> appendAfterSalesActions(actions, focusOrder);
+            case "profile" -> appendProfileActions(actions, focusOrder);
+            case "handoff" -> appendHandoffActions(actions);
+            default -> appendDefaultActions(actions, knowledgeHits);
+        }
+
+        if ((isKnowledgePolicyIntent(message) || !knowledgeHits.isEmpty()) && !"after_sales".equals(intent)) {
+            addSuggestedAction(actions, "knowledge-policy", "继续问售后规则", "退款和退货规则是什么", "knowledge");
+        }
+        if (!SERVICE_STATUS_ESCALATED.equals(serviceStatus)) {
+            addSuggestedAction(actions, "handoff", "转人工跟进", "帮我转人工客服继续处理", "support");
+        }
+        if (actions.isEmpty()) {
+            appendDefaultActions(actions, knowledgeHits);
+        }
+        return new ArrayList<>(actions.values()).stream()
+                .limit(4)
+                .toList();
+    }
+
+    private void appendOrderActions(Map<String, SuggestedActionResponse> actions,
+                                    OrderResponse focusOrder,
+                                    List<OrderResponse> recentOrders,
+                                    List<ProductResponse> matchedProducts,
+                                    String message) {
+        OrderResponse order = focusOrder != null ? focusOrder : recentOrders.stream().findFirst().orElse(null);
+        if (order != null) {
+            String orderRef = order.orderNo();
+            addSuggestedAction(actions, "order-status", "再查一次订单状态", "帮我查一下订单 %s 的当前状态".formatted(orderRef), "order");
+            addSuggestedAction(actions, "order-logistics", "查看物流进度", "帮我查一下订单 %s 的物流信息".formatted(orderRef), "order");
+            if (canPay(order)) {
+                addSuggestedAction(actions, "order-pay", "直接完成支付", "帮我直接支付订单 %s".formatted(orderRef), "order");
+            } else if (canCancel(order)) {
+                addSuggestedAction(actions, "order-cancel", "直接取消订单", "帮我直接取消订单 %s".formatted(orderRef), "order");
+            } else if (canConfirmReceipt(order)) {
+                addSuggestedAction(actions, "order-confirm", "直接确认收货", "帮我直接确认收货订单 %s".formatted(orderRef), "order");
+            } else if (canRefund(order)) {
+                addSuggestedAction(actions, "order-refund", "申请退款", "帮我申请订单 %s 的退款".formatted(orderRef), "order");
+            }
+        }
+        if (isPurchaseIntent(message) && !matchedProducts.isEmpty()) {
+            addSuggestedAction(actions, "order-draft", "生成下单草稿", "帮我生成 %s 的下单草稿".formatted(matchedProducts.get(0).name()), "product");
+        }
+    }
+
+    private void appendProductActions(Map<String, SuggestedActionResponse> actions,
+                                      List<ProductResponse> matchedProducts) {
+        if (!matchedProducts.isEmpty()) {
+            ProductResponse product = matchedProducts.get(0);
+            addSuggestedAction(actions, "product-fit", "适合什么人", "%s 适合什么样的用户".formatted(product.name()), "product");
+            addSuggestedAction(actions, "product-compare", "比较同类商品", "帮我比较一下 %s 和同类商品".formatted(product.name()), "product");
+            addSuggestedAction(actions, "product-draft", "生成下单草稿", "帮我生成 %s 的下单草稿".formatted(product.name()), "product");
+            return;
+        }
+        addSuggestedAction(actions, "product-recommend", "推荐通勤商品", "帮我推荐一款适合通勤的商品", "product");
+        addSuggestedAction(actions, "product-budget", "按预算推荐", "预算 2000 元以内，有什么值得买的商品", "product");
+    }
+
+    private void appendPromotionActions(Map<String, SuggestedActionResponse> actions,
+                                        List<ProductResponse> matchedProducts) {
+        addSuggestedAction(actions, "promotion-cart", "看可用优惠", "按我当前购物车金额，看看有哪些优惠可以用", "promotion");
+        addSuggestedAction(actions, "promotion-best", "挑更划算的商品", "帮我推荐一款当前更划算的商品", "promotion");
+        if (!matchedProducts.isEmpty()) {
+            addSuggestedAction(actions, "promotion-draft", "优惠后下单", "结合当前优惠，帮我生成 %s 的下单草稿".formatted(matchedProducts.get(0).name()), "promotion");
+        }
+    }
+
+    private void appendAfterSalesActions(Map<String, SuggestedActionResponse> actions,
+                                         OrderResponse focusOrder) {
+        addSuggestedAction(actions, "after-sales-policy", "查看退款规则", "退款和退货规则是什么", "knowledge");
+        if (focusOrder != null) {
+            addSuggestedAction(actions, "after-sales-status", "查看售后状态", "帮我查一下订单 %s 的售后状态".formatted(focusOrder.orderNo()), "order");
+            if (canRefund(focusOrder)) {
+                addSuggestedAction(actions, "after-sales-refund", "直接申请退款", "帮我申请订单 %s 的退款".formatted(focusOrder.orderNo()), "order");
+            }
+        } else {
+            addSuggestedAction(actions, "after-sales-order", "看看最近订单", "帮我查最近订单状态", "order");
+        }
+    }
+
+    private void appendProfileActions(Map<String, SuggestedActionResponse> actions,
+                                      OrderResponse focusOrder) {
+        if (focusOrder != null && canUpdateShippingAddress(focusOrder)) {
+            addSuggestedAction(actions, "profile-address", "修改订单地址", "帮我把订单 %s 的地址改成上海市徐汇区漕溪北路 399 号".formatted(focusOrder.orderNo()), "order");
+        }
+        addSuggestedAction(actions, "profile-default-address", "查看默认地址", "我当前默认收货地址是什么", "profile");
+        addSuggestedAction(actions, "profile-order-status", "看订单状态", "帮我查最近订单状态", "order");
+    }
+
+    private void appendHandoffActions(Map<String, SuggestedActionResponse> actions) {
+        addSuggestedAction(actions, "handoff-note", "补充给人工", "我补充一下问题：请优先帮我看订单和售后进度", "support");
+        addSuggestedAction(actions, "handoff-order", "继续查订单", "帮我查最近订单状态", "order");
+        addSuggestedAction(actions, "handoff-logistics", "继续查物流", "帮我查最近订单物流", "order");
+    }
+
+    private void appendDefaultActions(Map<String, SuggestedActionResponse> actions,
+                                      List<SearchResponse> knowledgeHits) {
+        addSuggestedAction(actions, "default-product", "推荐商品", "帮我推荐一款适合通勤的商品", "product");
+        addSuggestedAction(actions, "default-order", "查询订单", "帮我查最近订单状态", "order");
+        addSuggestedAction(actions, "default-promotion", "查看优惠", "现在有什么优惠活动或优惠码可以用", "promotion");
+        if (!knowledgeHits.isEmpty()) {
+            addSuggestedAction(actions, "default-knowledge", "继续问规则", "售后和退款规则是什么", "knowledge");
+        }
+    }
+
+    private void addSuggestedAction(Map<String, SuggestedActionResponse> actions,
+                                    String key,
+                                    String label,
+                                    String prompt,
+                                    String kind) {
+        if (key == null || key.isBlank() || label == null || label.isBlank() || prompt == null || prompt.isBlank()) {
+            return;
+        }
+        actions.putIfAbsent(key, new SuggestedActionResponse(key, label, prompt, kind == null || kind.isBlank() ? "general" : kind));
     }
 
     private String composeSummary(String current, String userMessage, String answer) {

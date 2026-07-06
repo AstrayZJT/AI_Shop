@@ -51,6 +51,18 @@ const ASSISTANT_SERVICE_STATUS_LABELS = {
   RESOLVED: "人工已回复",
 };
 
+const ASSISTANT_INTENT_LABELS = {
+  chat: "通用咨询",
+  product: "商品导购",
+  order: "订单查询",
+  order_action: "订单代办",
+  promotion: "优惠活动",
+  after_sales: "售后服务",
+  profile: "地址资料",
+  rag: "知识库问答",
+  handoff: "人工跟进",
+};
+
 const RECOMMENDATION_SCENES = [
   { key: "AUTO", label: "为你推荐", keywords: [] },
   { key: "COMMUTE", label: "通勤轻便", keywords: ["通勤", "便携", "轻便", "续航", "降噪", "耳机"] },
@@ -140,6 +152,49 @@ function assistantServiceStatusLabel(status) {
   return ASSISTANT_SERVICE_STATUS_LABELS[status] || ASSISTANT_SERVICE_STATUS_LABELS.ACTIVE;
 }
 
+function assistantSessionPriority(session) {
+  if (!session) {
+    return 99;
+  }
+  if (session.serviceStatus === "ACTIVE") {
+    return 0;
+  }
+  if (session.serviceStatus === "RESOLVED" && Number(session.unreadSupportCount || 0) > 0) {
+    return 1;
+  }
+  if (session.serviceStatus === "RESOLVED") {
+    return 2;
+  }
+  if (session.serviceStatus === "ESCALATED") {
+    return 3;
+  }
+  return 4;
+}
+
+function preferredDefaultAssistantSession() {
+  if (!clientState.sessions.length) {
+    return null;
+  }
+  const preferred = [...clientState.sessions]
+    .sort((left, right) => {
+      const byPriority = assistantSessionPriority(left) - assistantSessionPriority(right);
+      if (byPriority !== 0) {
+        return byPriority;
+      }
+      return Number(right.id || 0) - Number(left.id || 0);
+    })
+    .find((session) => assistantSessionPriority(session) < 3);
+  return preferred || null;
+}
+
+function hasOnlyEscalatedAssistantSessions() {
+  return clientState.sessions.length > 0 && !preferredDefaultAssistantSession();
+}
+
+function assistantIntentLabel(intent) {
+  return ASSISTANT_INTENT_LABELS[intent] || ASSISTANT_INTENT_LABELS.chat;
+}
+
 function currentAssistantSession() {
   return clientState.sessions.find((session) => session.id === clientState.sessionId) || null;
 }
@@ -159,6 +214,112 @@ function formatMessageTime(value) {
     return "";
   }
   return new Date(value).toLocaleString("zh-CN");
+}
+
+function normalizeAssistantSources(sources) {
+  if (!Array.isArray(sources)) {
+    return [];
+  }
+  return sources
+    .map((source) => {
+      if (typeof source === "string") {
+        return {
+          title: "知识库片段",
+          chunkText: source,
+          documentId: null,
+          chunkId: null,
+        };
+      }
+      return source;
+    })
+    .filter((source) => source && (source.title || source.chunkText));
+}
+
+function fallbackAssistantActions(intent, session) {
+  if (session?.serviceStatus === "ESCALATED") {
+    return [
+      { key: "handoff-note", label: "补充给人工", prompt: "我补充一下问题：请优先帮我看订单和售后进度", kind: "support" },
+      { key: "handoff-order", label: "继续查订单", prompt: "帮我查最近订单状态", kind: "order" },
+      { key: "handoff-logistics", label: "继续查物流", prompt: "帮我查最近订单物流", kind: "order" },
+    ];
+  }
+  switch (intent) {
+    case "product":
+      return [
+        { key: "product-recommend", label: "推荐商品", prompt: "帮我推荐一款适合通勤的商品", kind: "product" },
+        { key: "product-budget", label: "预算推荐", prompt: "预算 2000 元以内，有什么值得买的商品", kind: "product" },
+        { key: "product-draft", label: "生成草稿", prompt: "帮我生成一个下单草稿", kind: "product" },
+      ];
+    case "order":
+    case "order_action":
+      return [
+        { key: "order-status", label: "查订单", prompt: "帮我查最近订单状态", kind: "order" },
+        { key: "order-logistics", label: "查物流", prompt: "帮我查最近订单物流", kind: "order" },
+        { key: "order-refund", label: "问售后", prompt: "帮我看看最近订单能不能申请退款", kind: "order" },
+      ];
+    case "promotion":
+      return [
+        { key: "promotion-list", label: "看优惠", prompt: "现在有什么优惠活动或优惠码可以用", kind: "promotion" },
+        { key: "promotion-product", label: "更划算商品", prompt: "帮我推荐一款当前更划算的商品", kind: "promotion" },
+        { key: "promotion-draft", label: "生成草稿", prompt: "结合当前优惠，帮我生成一个下单草稿", kind: "promotion" },
+      ];
+    case "after_sales":
+      return [
+        { key: "after-sales-policy", label: "看退款规则", prompt: "退款和退货规则是什么", kind: "knowledge" },
+        { key: "after-sales-order", label: "查订单", prompt: "帮我查最近订单状态", kind: "order" },
+        { key: "after-sales-human", label: "转人工", prompt: "帮我转人工客服继续处理", kind: "support" },
+      ];
+    default:
+      return [
+        { key: "default-product", label: "推荐商品", prompt: "帮我推荐一款适合通勤的商品", kind: "product" },
+        { key: "default-order", label: "查询订单", prompt: "帮我查最近订单状态", kind: "order" },
+        { key: "default-promotion", label: "优惠活动", prompt: "现在有什么优惠活动或优惠码可以用", kind: "promotion" },
+      ];
+  }
+}
+
+function renderAssistantActionButtons(actions) {
+  if (!actions.length) {
+    return `<div class="assistant-empty">当前没有额外建议动作，你可以直接继续提问。</div>`;
+  }
+  return `
+    <div class="assistant-action-grid">
+      ${actions.map((action) => `
+        <button
+          type="button"
+          class="assistant-action-btn ${escapeHtml(action.kind || "general")}"
+          data-assistant-prompt="${escapeHtml(action.prompt || "")}"
+        >
+          ${escapeHtml(action.label || "继续提问")}
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderAssistantSources(sources) {
+  if (!sources.length) {
+    return `<div class="assistant-empty">本轮还没有命中知识库片段；涉及售后、退款、物流规则时，命中的原文会展示在这里。</div>`;
+  }
+  return `
+    <div class="assistant-source-list">
+      ${sources.map((source) => `
+        <article class="assistant-source-card">
+          <div class="assistant-source-head">
+            <strong>${escapeHtml(source.title || "知识库片段")}</strong>
+            <span class="inline-meta">${source.documentId ? `文档 #${escapeHtml(source.documentId)}` : "知识命中"}</span>
+          </div>
+          <div class="panel-hint">${escapeHtml(source.chunkText || "").replaceAll("\n", "<br>")}</div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function bindAssistantMetaActions(host) {
+  host.querySelectorAll("[data-assistant-prompt]").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => sendAssistantMessage(button.getAttribute("data-assistant-prompt") || "")));
+  });
 }
 
 function setStoreStatus(text) {
@@ -1468,7 +1629,7 @@ function renderSessions() {
     return;
   }
   host.innerHTML = clientState.sessions.map((session) => `
-    <button type="button" class="session-pill ${clientState.sessionId === session.id ? "active" : ""}" data-session-id="${session.id}">
+    <button type="button" class="session-pill ${clientState.sessionId === session.id ? "active" : ""} ${Number(session.unreadSupportCount || 0) > 0 ? "has-unread" : ""}" data-session-id="${session.id}">
       <strong>${escapeHtml(session.title)}</strong>
       <div class="inline-meta">${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</div>
       <div class="inline-meta">${escapeHtml(session.lastIntent || "chat")}${session.supportAgentDisplayName ? ` · ${escapeHtml(session.supportAgentDisplayName)}` : ""}</div>
@@ -1486,6 +1647,10 @@ function renderAssistantMessages(messages) {
     return;
   }
   if (!messages.length) {
+    if (clientState.user && hasOnlyEscalatedAssistantSessions() && !clientState.sessionId) {
+      host.innerHTML = `<div class="empty-state">你当前只有人工跟进中的历史会话。直接发送新消息会新建一条 AI 会话，也可以点上方会话继续查看人工处理进度。</div>`;
+      return;
+    }
     host.innerHTML = `<div class="empty-state">问 AI 客服商品、订单、售后或知识库问题，它会结合业务数据来回答。</div>`;
     return;
   }
@@ -1507,14 +1672,19 @@ function renderAssistantMeta(payload = clientState.assistantContext) {
   }
   const session = currentAssistantSession();
   if (!payload && !session) {
+    if (clientState.user && hasOnlyEscalatedAssistantSessions()) {
+      host.textContent = "当前只有人工跟进中的历史会话。你可以点上方历史会话查看人工处理进度，也可以直接发送新消息创建一条新的 AI 会话。";
+      return;
+    }
     host.textContent = "这里会展示会话状态、AI 命中的知识片段、下单草稿摘要，以及是否已经转人工。";
     return;
   }
   const status = assistantServiceStatusLabel(session?.serviceStatus);
   const intent = payload?.intent || session?.lastIntent || "chat";
-  const sourceText = payload?.sources?.length
-    ? payload.sources.join(" | ")
-    : "本会话支持商品咨询、订单查询、知识库检索、AI 代办和人工接管。";
+  const sources = normalizeAssistantSources(payload?.sources);
+  const suggestedActions = Array.isArray(payload?.suggestedActions) && payload.suggestedActions.length
+    ? payload.suggestedActions
+    : fallbackAssistantActions(intent, session);
   const draftText = payload?.pendingOrderDraft
     ? "本轮已生成下单草稿"
     : clientState.pendingDraft?.status === "PENDING_CONFIRMATION"
@@ -1531,13 +1701,37 @@ function renderAssistantMeta(payload = clientState.assistantContext) {
       : "人工客服已经回复，你可以继续补充问题，系统会重新回到正常 AI 会话。";
   }
   host.innerHTML = `
-    <div><strong>会话状态：</strong>${escapeHtml(status)}</div>
-    <div><strong>当前意图：</strong>${escapeHtml(intent)}</div>
-    <div><strong>人工跟进：</strong>${escapeHtml(session?.supportAgentDisplayName || "暂未分配人工客服")}</div>
-    <div><strong>草稿状态：</strong>${escapeHtml(draftText)}</div>
-    <div><strong>提示：</strong>${escapeHtml(statusHint)}</div>
-    <div><strong>知识命中：</strong>${escapeHtml(sourceText)}</div>
+    <div class="assistant-meta-grid">
+      <div class="assistant-meta-item">
+        <span>会话状态</span>
+        <strong>${escapeHtml(status)}</strong>
+      </div>
+      <div class="assistant-meta-item">
+        <span>当前意图</span>
+        <strong>${escapeHtml(assistantIntentLabel(intent))}</strong>
+      </div>
+      <div class="assistant-meta-item">
+        <span>人工跟进</span>
+        <strong>${escapeHtml(session?.supportAgentDisplayName || "暂未分配人工客服")}</strong>
+      </div>
+      <div class="assistant-meta-item">
+        <span>草稿状态</span>
+        <strong>${escapeHtml(draftText)}</strong>
+      </div>
+    </div>
+    <div class="assistant-status-hint">${escapeHtml(statusHint)}</div>
+    <div class="assistant-meta-panels">
+      <section class="assistant-inline-panel">
+        <div class="assistant-panel-title">下一步建议</div>
+        ${renderAssistantActionButtons(suggestedActions)}
+      </section>
+      <section class="assistant-inline-panel">
+        <div class="assistant-panel-title">知识命中</div>
+        ${renderAssistantSources(sources)}
+      </section>
+    </div>
   `;
+  bindAssistantMetaActions(host);
 }
 
 function renderAssistantDraft() {
@@ -1660,8 +1854,11 @@ async function loadSessions() {
     clientState.threadId = null;
   }
   if (!clientState.sessionId && clientState.sessions.length) {
-    clientState.sessionId = clientState.sessions[0].id;
-    clientState.threadId = `assistant-${clientState.sessionId}`;
+    const preferredSession = preferredDefaultAssistantSession();
+    if (preferredSession) {
+      clientState.sessionId = preferredSession.id;
+      clientState.threadId = `assistant-${clientState.sessionId}`;
+    }
   }
   renderSessions();
   renderAssistantMeta(clientState.assistantContext);
@@ -1696,6 +1893,7 @@ async function selectSession(sessionId) {
     serviceStatus: session.serviceStatus,
     sources: [],
     pendingOrderDraft: null,
+    suggestedActions: [],
   };
   renderSessions();
   renderAssistantMeta(clientState.assistantContext);
@@ -1712,6 +1910,7 @@ async function createSession() {
     serviceStatus: session.serviceStatus,
     sources: [],
     pendingOrderDraft: null,
+    suggestedActions: [],
   };
   renderAssistantMeta(clientState.assistantContext);
   renderAssistantDraft();
@@ -1859,6 +2058,7 @@ async function requestHumanSupport() {
     serviceStatus: session.serviceStatus,
     sources: [],
     pendingOrderDraft: null,
+    suggestedActions: [],
   };
   clientById("assistantInput").value = "";
   await loadSessions();

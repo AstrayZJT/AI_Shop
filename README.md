@@ -63,6 +63,8 @@ $env:SHOP_AI_ENABLED="false"
 - embedding 也不是真实语义向量，而是本地 64 维简化向量
 - 向量检索走的是内存向量存储，不是 pgvector
 - 但知识库原文、切块文本、embedding 缓存仍然会落业务表，便于联调整个流程
+- 商品、购物车、订单、售后、人工接管、知识库导入这些业务流程都是真实后端逻辑，不是只在前端写死的假数据
+- 也就是说，这个模式里“假的”主要是模型推理能力和向量检索形态，不是电商流程本身
 - 你在控制台里看不到真实远程模型的请求 / 响应日志
 - 如果只看“页面能聊、AI 有回复”，并不能说明你已经接上了真模型
 
@@ -112,6 +114,15 @@ $env:OPENAI_API_KEY="你的 Key"
 
 也就是说，代码层面用的是 OpenAI 兼容客户端，但你实际可以接的是 DashScope 的兼容接口。
 
+这里要特别注意一件事：
+
+- 虽然这里接的是 DashScope 兼容接口
+- 但当前项目读取的环境变量名字仍然是 `OPENAI_API_KEY`
+
+也就是说，只要你沿用当前代码，不管你接 OpenAI 兼容服务还是 DashScope 兼容服务，密钥都要放在：
+
+- `OPENAI_API_KEY`
+
 真正决定“有没有启用真实模型 Bean”的开关是：
 
 - `shop.ai.enabled`
@@ -142,7 +153,65 @@ $env:OPENAI_API_KEY="你的 Key"
 4. 控制台有没有真实模型请求日志
 5. 数据库、网络、Key 权限是否允许 DashScope 兼容接口正常返回
 
-### 3.3 你的 key 我知不知道
+### 3.3 不要靠“能聊天”判断有没有接上真模型
+
+这一点要单独强调。
+
+现在项目里即使在本地联调模式下，AI 客服页面也可以正常回复、也可以走商品推荐、订单查询、草稿生成这些业务流程。
+
+但这只能说明：
+
+- 页面通了
+- 后端接口通了
+- 本地兜底逻辑在工作
+
+它完全**不能单独证明**你现在跑的是远程真实模型。
+
+项目已经补了一个专门的运行态检查接口：
+
+- `GET /api/assistant/health`
+
+这个接口会返回当前进程的真实运行态，例如：
+
+- `mode`：`REMOTE_MODEL` 或 `LOCAL_FALLBACK`
+- `provider`：当前模型提供方
+- `apiKeyConfigured`：当前进程里有没有拿到 key
+- `chatModelName` / `embeddingModelName`：当前真正生效的模型名
+- `vectorStoreType`：`PGVECTOR` 或 `IN_MEMORY`
+- `knowledgeDocumentCount` / `knowledgeChunkCount` / `indexedSegmentCount`
+
+前台客户端和后台管理端页面里也已经有 AI 运行态面板，会直接显示当前到底是：
+
+- 真实模型
+- 本地联调
+- pgvector 向量库
+- 还是内存向量库
+
+所以最可靠的判断方式不是“能不能聊”，而是：
+
+1. 先看页面里的 AI 运行态面板
+2. 再看 `/api/assistant/health`
+3. 最后结合控制台里的模型请求日志一起确认
+
+如果页面显示的是：
+
+- `LOCAL_FALLBACK`
+- `LOCAL_FALLBACK_CHAT`
+- `LOCAL_FAKE_EMBEDDING_64D`
+- `IN_MEMORY`
+
+那就说明你现在跑的是本地联调模式，不是真正的远程模型。
+
+如果页面显示的是：
+
+- `REMOTE_MODEL`
+- `qwen-plus` 或你自己配置的真实聊天模型
+- `text-embedding-v4` 或你自己配置的真实 embedding 模型
+- `PGVECTOR`
+
+这时才说明当前进程真正接上了远程模型和持久化向量库。
+
+### 3.4 你的 key 我知不知道
 
 不知道。
 
@@ -153,6 +222,13 @@ $env:OPENAI_API_KEY="你的 Key"
 - `OPENAI_API_KEY`
 
 你在 IDEA 里填的 Environment Variables，或者你在终端里临时设置的环境变量，只在你的本地进程里生效，不属于仓库内容。
+
+再说直白一点：
+
+- 我不知道你的 key
+- 仓库里也不应该保存你的 key
+- 真正运行时有没有拿到 key，要看“你启动的那个进程”的环境变量
+- 最方便的判断方式就是看页面里的 AI 运行态面板，或者直接访问 `/api/assistant/health`
 
 ## 4. 环境变量清单
 
@@ -174,6 +250,8 @@ $env:DB_PASSWORD=""
 $env:SHOP_AI_ENABLED="true"
 $env:OPENAI_API_KEY="你的 Key"
 ```
+
+如果你当前接的是 DashScope 兼容接口，也还是填这里，不需要改变量名。
 
 如果只想本地联调，不接真实模型：
 
@@ -214,6 +292,16 @@ $env:AGENT_WEBPAGE_MAX_CHARACTERS="8000"
 
 ### 5.2 PowerShell 启动示例
 
+如果你只想先把平台业务流程跑通，推荐优先用“本地联调模式”。
+
+如果你要验证：
+
+- 真实模型回答质量
+- 真实 embedding
+- 真实 pgvector 检索
+
+那就必须切到“真实 AI 模型模式”。
+
 ### 集成模式（后端同时托管前端）
 
 ### 真实 AI 模型模式
@@ -229,6 +317,14 @@ $env:OPENAI_API_KEY="你的 Key"
 mvn spring-boot:run
 ```
 
+这一组命令的真实含义是：
+
+- 电商业务走当前后端真实逻辑
+- AI 对话走远程模型
+- embedding 走远程向量模型
+- 如果向量数据源最终解析到 PostgreSQL，就会使用 pgvector
+- 页面里的 AI 运行态面板会显示 `真实模型`
+
 ### 本地联调模式
 
 ```powershell
@@ -240,6 +336,13 @@ $env:DB_PASSWORD=""
 $env:SHOP_AI_ENABLED="false"
 mvn spring-boot:run
 ```
+
+这一组命令的真实含义是：
+
+- 电商业务仍然完整可跑
+- AI 客服仍然可问商品、订单、售后、知识库问题
+- 但模型回复和 embedding 是本地兜底
+- 页面里的 AI 运行态面板会显示 `本地联调`
 
 ### 分离模式（Spring Boot API + 独立前端）
 
@@ -300,6 +403,13 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 如果你在 IDEA 里已经配置好了这些环境变量，直接运行 Spring Boot 主类即可。
 
+这里是最容易踩坑的地方：
+
+- 你在 PowerShell 里执行过 `$env:OPENAI_API_KEY=...`
+- 不代表 IDEA 启动的 Spring Boot 进程也能看到它
+
+如果你是从 IDEA 点运行按钮启动，优先相信 IDEA Run Configuration 里的环境变量，而不是当前终端窗口。
+
 ### 5.4 看日志
 
 要看完整日志，建议：
@@ -324,9 +434,12 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 客户端直达：`http://localhost:8080/client/index.html`
 - 助手入口：`http://localhost:8080/assistant.html`
 - 管理端：`http://localhost:8080/admin/index.html`
+- 管理端快捷入口：`http://localhost:8080/admin`
+- 客户端快捷入口：`http://localhost:8080/client`
 
 分离模式（默认 Vite 端口）：
 
+- 前端根入口：`http://localhost:5173/`（独立前端工作台，可查看 AI 运行态和入口导航）
 - 客户端：`http://localhost:5173/client/index.html`
 - 管理端：`http://localhost:5173/admin/index.html`
 
@@ -390,6 +503,9 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 售后工单按阶段统计、筛选、查看逆向物流和订单时间线
 - 用户列表
 - 知识库文档导入与检索
+- 知识库原文查看、分块明细查看、索引状态查看
+- 全量知识索引重建
+- AI 运行态面板（真实模型 / 本地联调、向量库类型、索引数量）
 - AI 会话列表
 - 人工接管队列
 - AI 会话认领
@@ -397,6 +513,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - AI 会话首响时间、认领时间、结案时间
 - AI 客服工作台筛选视图（我的待处理、待认领、待回复、首响超时、客户未读、已结案）
 - 人工客服认领、分派、转交会话
+- AI 会话详情内联查看用户资料、最近订单和关联下单草稿
 - 人工客服回复并结案
 
 ### 8.3 AI 客服
@@ -420,6 +537,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 直接代办修改发货前订单地址
 - 查询当前优惠活动、优惠码、满减门槛和预计优惠
 - 查询知识库中的售后、物流、政策内容
+- 在客户端展示知识命中来源卡片和下一步建议动作
 - 用户主动要求“转人工”后进入人工接管流程
 - 管理端可认领人工会话，并持续查看待处理数和客户未读状态
 - 管理端人工回复后，消息会回流到客户端会话
@@ -631,8 +749,9 @@ AI 会话新增了 `service_status` 字段，用于区分：
 
 如果你使用独立前端工程：
 
-- 开发时访问 `http://localhost:5173/client/index.html`
-- 或者访问 `http://localhost:5173/admin/index.html`
+- 开发时可以先访问 `http://localhost:5173/` 查看工作台和运行态
+- 再进入 `http://localhost:5173/client/index.html`
+- 或者直接进入 `http://localhost:5173/admin/index.html`
 - `/api/*` 会由 Vite 代理到 Spring Boot
 - 后端默认允许 `5173` / `4173` 端口跨域携带 cookie
 - 当前 `frontend/` 工程会优先尝试你手动配置的 `VITE_BACKEND_TARGET`；如果没配，就自动探测本机 `8080` / `8082`
@@ -702,6 +821,7 @@ mvn -q -DskipTests compile
 如果你现在要快速判断“我跑起来的是不是真 AI”，最简单的方法只有两个：
 
 1. 看你有没有设置 `SHOP_AI_ENABLED=true` 和 `OPENAI_API_KEY`
-2. 看控制台里有没有真实模型请求日志
+2. 看页面里的 AI 运行态面板或 `/api/assistant/health`
+3. 再看控制台里有没有真实模型请求日志
 
-这两个都满足，才说明当前进程真的在调远程模型。
+至少前两条都对得上，才说明当前进程大概率真的在调远程模型。
