@@ -1,6 +1,9 @@
 package com.aishop.service;
 
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,6 +17,8 @@ import com.aishop.repository.ProductRepository;
 
 @Service
 public class ProductService {
+
+    private static final Pattern SEARCH_TOKEN_PATTERN = Pattern.compile("[\\p{IsHan}]{2,}|[a-z0-9]{2,}");
 
     private final ProductRepository productRepository;
     private final ProductCategoryRepository categoryRepository;
@@ -32,6 +37,22 @@ public class ProductService {
     public List<ProductResponse> search(String keyword) {
         if (keyword == null || keyword.isBlank()) {
             return listAll();
+        }
+        String normalizedKeyword = normalize(keyword);
+        List<String> tokens = SEARCH_TOKEN_PATTERN.matcher(normalizedKeyword)
+                .results()
+                .map(match -> match.group().trim())
+                .distinct()
+                .toList();
+
+        List<ScoredProduct> scored = productRepository.findAll().stream()
+                .map(product -> new ScoredProduct(product, scoreProduct(product, normalizedKeyword, tokens)))
+                .filter(result -> result.score() > 0)
+                .sorted(Comparator.comparingInt(ScoredProduct::score).reversed()
+                        .thenComparing(result -> result.product().getStock(), Comparator.reverseOrder()))
+                .toList();
+        if (!scored.isEmpty()) {
+            return scored.stream().map(result -> toResponse(result.product())).toList();
         }
         return productRepository.findByNameContainingIgnoreCaseOrDescriptionContainingIgnoreCase(keyword, keyword)
                 .stream().map(this::toResponse).toList();
@@ -103,4 +124,61 @@ public class ProductService {
                 product.getImageUrl(),
                 product.getCategory() == null ? null : product.getCategory().getName());
     }
+
+    private int scoreProduct(Product product, String normalizedKeyword, List<String> tokens) {
+        String name = normalize(product.getName());
+        String description = normalize(product.getDescription());
+        String category = normalize(product.getCategory() == null ? null : product.getCategory().getName());
+        String combined = name + " " + description + " " + category;
+
+        int score = 0;
+        if (!normalizedKeyword.isBlank()) {
+            if (name.contains(normalizedKeyword)) {
+                score += 260;
+            }
+            if (combined.contains(normalizedKeyword)) {
+                score += 220;
+            }
+            if (!name.isBlank() && normalizedKeyword.contains(name)) {
+                score += 320;
+            }
+        }
+        for (String token : tokens) {
+            if (name.contains(token)) {
+                score += 72 + token.length() * 14;
+            }
+            if (description.contains(token)) {
+                score += 28 + token.length() * 6;
+            }
+            if (category.contains(token)) {
+                score += 18 + token.length() * 5;
+            }
+        }
+        return score;
+    }
+
+    private String normalize(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String lowered = value.toLowerCase(Locale.ROOT);
+        StringBuilder builder = new StringBuilder(lowered.length());
+        for (int i = 0; i < lowered.length(); i++) {
+            char ch = lowered.charAt(i);
+            if (Character.isLetterOrDigit(ch) || isChinese(ch)) {
+                builder.append(ch);
+            }
+        }
+        return builder.toString();
+    }
+
+    private boolean isChinese(char ch) {
+        Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
+        return block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
+                || block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS;
+    }
+
+    private record ScoredProduct(Product product, int score) {}
 }

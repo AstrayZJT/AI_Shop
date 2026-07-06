@@ -48,12 +48,13 @@ public class KnowledgeIndexSynchronizer implements CommandLineRunner {
             log.info("knowledge index sync skipped: no knowledge chunks found");
             return;
         }
+        int expectedDimension = embeddingModel.dimension();
 
         embeddingStore.removeAll();
 
         List<KnowledgeChunk> updatedChunks = new ArrayList<>();
         for (KnowledgeChunk chunk : chunks) {
-            Embedding embedding = loadEmbedding(chunk);
+            Embedding embedding = loadEmbedding(chunk, expectedDimension);
             if (embedding == null) {
                 embedding = embeddingModel.embed(TextSegment.from(chunk.getChunkText())).content();
                 chunk.setEmbeddingJson(objectMapper.writeValueAsString(embedding.vector()));
@@ -84,14 +85,22 @@ public class KnowledgeIndexSynchronizer implements CommandLineRunner {
         return TextSegment.from(chunk.getChunkText(), metadata);
     }
 
-    private Embedding loadEmbedding(KnowledgeChunk chunk) {
+    private Embedding loadEmbedding(KnowledgeChunk chunk, int expectedDimension) {
         String embeddingJson = chunk.getEmbeddingJson();
         if (embeddingJson == null || embeddingJson.isBlank() || "[]".equals(embeddingJson.trim())) {
             return null;
         }
         try {
             float[] vector = objectMapper.readValue(embeddingJson, float[].class);
-            return vector.length == 0 ? null : Embedding.from(vector);
+            if (vector.length == 0) {
+                return null;
+            }
+            if (vector.length != expectedDimension) {
+                log.info("knowledge chunk {} cached embedding dimension mismatch: cached={}, expected={}, regenerating",
+                        chunk.getId(), vector.length, expectedDimension);
+                return null;
+            }
+            return Embedding.from(vector);
         } catch (Exception ex) {
             log.warn("failed to parse cached embedding for knowledge chunk {}", chunk.getId(), ex);
             return null;

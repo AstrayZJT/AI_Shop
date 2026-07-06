@@ -29,6 +29,7 @@ public class AssistantService {
 
     private static final Logger log = LoggerFactory.getLogger(AssistantService.class);
     private static final Pattern ORDER_NO_PATTERN = Pattern.compile("ORD-[A-Z0-9]{8}");
+    private static final Pattern PURCHASE_QUANTITY_PATTERN = Pattern.compile("(?:买|购买|下单|来|要|购入)\\D{0,4}(\\d{1,2}|一|二|两|三|四|五|六|七|八|九|十)\\s*(?:个|件|台|部|副|双|盒)?");
 
     private final AssistantSessionRepository sessionRepository;
     private final AssistantMessageRepository messageRepository;
@@ -100,6 +101,7 @@ public class AssistantService {
         var allOrders = orderService.listOrders(user);
         var recentOrders = allOrders.stream().limit(3).toList();
         var exactOrder = findExactMentionedOrder(message, allOrders);
+        int requestedQuantity = extractRequestedQuantity(message);
         var sources = knowledgeService.search(message).stream()
                 .map(s -> s.title() + ": " + s.chunkText())
                 .limit(3)
@@ -108,7 +110,7 @@ public class AssistantService {
                 session.getId(), intent, sources.size());
 
         var answer = buildAnswer(user, intent, sources, matchedProducts, recentOrders, exactOrder, message, currentThreadId);
-        var draftJson = buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts);
+        var draftJson = buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts, requestedQuantity);
         log.info("assistant response: sessionId={}, intent={}, draftCreated={}, answer={}",
                 session.getId(), intent, draftJson != null, preview(answer));
 
@@ -216,7 +218,8 @@ public class AssistantService {
                                       String intent,
                                       String threadId,
                                       String message,
-                                      List<ProductResponse> matchedProducts) {
+                                      List<ProductResponse> matchedProducts,
+                                      int requestedQuantity) {
         if (!"order".equals(intent) || !isPurchaseIntent(message)) {
             return null;
         }
@@ -226,7 +229,7 @@ public class AssistantService {
         if (product == null) {
             return null;
         }
-        return orderService.buildDraft(user, product.id(), 1, threadId).draftJson();
+        return orderService.buildDraft(user, product.id(), requestedQuantity, threadId).draftJson();
     }
 
     private String composeSummary(String current, String userMessage, String answer) {
@@ -309,6 +312,40 @@ public class AssistantService {
     private boolean isKnowledgePolicyIntent(String message) {
         String text = message == null ? "" : message.toLowerCase();
         return text.contains("规则") || text.contains("政策") || text.contains("说明") || text.contains("faq");
+    }
+
+    private int extractRequestedQuantity(String message) {
+        Matcher matcher = PURCHASE_QUANTITY_PATTERN.matcher(message == null ? "" : message);
+        if (!matcher.find()) {
+            return 1;
+        }
+        int quantity = parseQuantityToken(matcher.group(1));
+        return Math.max(1, Math.min(quantity, 20));
+    }
+
+    private int parseQuantityToken(String token) {
+        if (token == null || token.isBlank()) {
+            return 1;
+        }
+        return switch (token.trim()) {
+            case "一" -> 1;
+            case "二", "两" -> 2;
+            case "三" -> 3;
+            case "四" -> 4;
+            case "五" -> 5;
+            case "六" -> 6;
+            case "七" -> 7;
+            case "八" -> 8;
+            case "九" -> 9;
+            case "十" -> 10;
+            default -> {
+                try {
+                    yield Integer.parseInt(token.trim());
+                } catch (NumberFormatException ex) {
+                    yield 1;
+                }
+            }
+        };
     }
 
     private boolean hasExplicitOrderReference(String message) {

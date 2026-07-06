@@ -13,7 +13,7 @@
       <div class="brand-copy">
         <span class="eyebrow">AI Commerce Admin</span>
         <h1>AI Shop 管理端</h1>
-        <p>集中管理商品、订单、知识库和用户，同时保留电商 AI 客服所依赖的业务数据。</p>
+        <p>把商品、订单、知识库、用户和售后处理放进同一套后台，支持日常运营、履约推进和 AI 客服数据维护。</p>
       </div>
       <div class="auth-box">
         <div id="adminStatus" class="status-chip">等待管理员登录</div>
@@ -37,11 +37,54 @@
         <div class="section-head">
           <div>
             <h2>经营看板</h2>
-            <p>实时查看用户、商品、订单、知识库和待发货数据</p>
+            <p>实时查看用户、商品、订单、知识库和待处理队列，快速判断当前平台运行状态。</p>
           </div>
           <button id="refreshDashboardBtn" type="button" class="ghost">刷新看板</button>
         </div>
         <div id="metricGrid" class="metric-grid"></div>
+      </div>
+    </section>
+
+    <section class="band muted-band">
+      <div class="container ops-grid">
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>运营工作台</h2>
+              <p>把退款审核、待发货推进和重点订单定位集中到一个视图里，减少来回切换。</p>
+            </div>
+          </div>
+          <div class="ops-columns">
+            <section class="panel-section">
+              <div class="section-head compact nested-head">
+                <div>
+                  <h3>退款审核队列</h3>
+                  <p>优先处理用户已经提交的退款申请。</p>
+                </div>
+              </div>
+              <div id="refundQueueList" class="stack-list"></div>
+            </section>
+            <section class="panel-section">
+              <div class="section-head compact nested-head">
+                <div>
+                  <h3>待发货队列</h3>
+                  <p>从待发货到处理中订单都可以在这里快速推进。</p>
+                </div>
+              </div>
+              <div id="shipmentQueueList" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>库存预警</h2>
+              <p>优先关注低库存商品，直接跳转到编辑区补货，避免影响前台下单和 AI 推荐。</p>
+            </div>
+          </div>
+          <div id="lowStockList" class="stack-list"></div>
+        </section>
       </div>
     </section>
 
@@ -51,16 +94,17 @@
           <div class="section-head compact">
             <div>
               <h2>商品管理</h2>
-              <p>维护前台展示和 AI 推荐会使用的商品数据</p>
+              <p>维护前台展示和 AI 推荐会使用到的商品名称、分类、库存、图片和价格。</p>
             </div>
           </div>
           <div id="adminProductList" class="table-list"></div>
         </section>
+
         <section class="panel work-panel">
           <div class="section-head compact">
             <div>
               <h2 id="productFormTitle">新增商品</h2>
-              <p>图片、价格、分类、库存都会直接影响客户端和 AI 客服</p>
+              <p>保存后的商品会同步进入前台目录，也会成为 AI 客服可推荐的候选商品。</p>
             </div>
           </div>
           <form id="productForm" class="form-grid">
@@ -80,14 +124,23 @@
       </div>
     </section>
 
-    <section class="band">
+    <section id="orderManagement" class="band">
       <div class="container">
         <div class="section-head">
           <div>
             <h2>订单管理</h2>
-            <p>支持推进订单履约状态、处理退款申请，并保留运营审核备注</p>
+            <p>支持筛选订单、推进履约状态、处理退款申请，并保留运营备注和商品明细。</p>
+          </div>
+          <div class="filter-toolbar">
+            <div class="search-cluster admin-search-cluster">
+              <input id="adminOrderSearchInput" type="text" placeholder="搜索订单号、用户名、SKU 或商品名">
+              <button id="adminOrderSearchBtn" type="button" class="secondary">搜索订单</button>
+              <button id="clearOrderFiltersBtn" type="button" class="ghost">清空筛选</button>
+            </div>
           </div>
         </div>
+        <div id="adminOrderFilterTabs" class="segmented"></div>
+        <div id="orderFilterSummary" class="panel-hint"></div>
         <div id="adminOrdersList" class="table-list"></div>
       </div>
     </section>
@@ -98,23 +151,24 @@
           <div class="section-head compact">
             <div>
               <h2>知识库管理</h2>
-              <p>导入售后、物流、退款、商品知识，供 AI 客服检索</p>
+              <p>导入售后、物流、商品、服务政策等原文，供 AI 客服向量检索和规则回答使用。</p>
             </div>
           </div>
           <form id="knowledgeForm" class="form-grid">
             <input id="knowledgeTitle" type="text" placeholder="知识标题">
             <input id="knowledgeType" type="text" placeholder="知识类型，例如 faq、policy">
-            <textarea id="knowledgeContent" placeholder="输入知识原文，系统会切块并写入向量库"></textarea>
+            <textarea id="knowledgeContent" placeholder="输入知识原文，系统会自动切块并写入向量库"></textarea>
             <div class="form-actions">
               <button id="saveKnowledgeBtn" type="submit" class="primary">导入知识</button>
             </div>
           </form>
         </section>
+
         <section class="panel work-panel">
           <div class="section-head compact">
             <div>
               <h2>知识文档</h2>
-              <p>这里既能看原文摘要，也能直接测试向量检索召回效果</p>
+              <p>一边查看当前文档摘要，一边即时测试向量检索的命中效果。</p>
             </div>
           </div>
           <div class="knowledge-search-block">
@@ -134,7 +188,7 @@
         <div class="section-head">
           <div>
             <h2>用户列表</h2>
-            <p>用于观察前台用户和管理员账号状态</p>
+            <p>观察平台中的客户端和管理员账号，辅助处理售后、地址和身份排查。</p>
           </div>
         </div>
         <div id="adminUsersList" class="table-list"></div>

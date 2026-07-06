@@ -8,6 +8,8 @@ const adminState = {
   knowledgeSearchKeyword: "",
   users: [],
   editingProductId: null,
+  orderFilterStatus: "ALL",
+  orderFilterKeyword: "",
 };
 
 const ADMIN_STATUS_LABELS = {
@@ -21,6 +23,16 @@ const ADMIN_STATUS_LABELS = {
   REFUNDED: "已退款",
   CANCELLED: "已取消",
 };
+
+const ORDER_FILTERS = [
+  { key: "ALL", label: "全部订单" },
+  { key: "REFUND_REQUESTED", label: "退款审核" },
+  { key: "PENDING_SHIPMENT", label: "待发货" },
+  { key: "SHIPPED", label: "已发货" },
+  { key: "COMPLETED", label: "已完成" },
+  { key: "REFUNDED", label: "已退款" },
+  { key: "CANCELLED", label: "已取消" },
+];
 
 function adminById(id) {
   return document.getElementById(id);
@@ -92,10 +104,90 @@ function money(value) {
 function metricCard(label, value) {
   return `
     <article class="metric-card">
-      <div class="inline-meta">${label}</div>
-      <div class="metric-value">${value}</div>
+      <div class="inline-meta">${escapeHtml(label)}</div>
+      <div class="metric-value">${escapeHtml(value)}</div>
     </article>
   `;
+}
+
+function orderTagClass(status) {
+  if (status === "REFUND_REQUESTED") {
+    return "danger";
+  }
+  if (status === "REFUNDED" || status === "COMPLETED") {
+    return "success";
+  }
+  if (status === "CONFIRMED" || status === "PROCESSING") {
+    return "warning";
+  }
+  return "";
+}
+
+function normalizeText(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isPendingShipment(order) {
+  return order.status === "CONFIRMED" || order.status === "PROCESSING";
+}
+
+function refundQueueOrders() {
+  return adminState.orders.filter((order) => order.status === "REFUND_REQUESTED");
+}
+
+function shipmentQueueOrders() {
+  return adminState.orders.filter(isPendingShipment);
+}
+
+function lowStockProducts() {
+  return [...adminState.products]
+    .filter((product) => Number(product.stock || 0) <= 5)
+    .sort((left, right) => Number(left.stock || 0) - Number(right.stock || 0));
+}
+
+function orderFilterCount(filterKey) {
+  if (filterKey === "ALL") {
+    return adminState.orders.length;
+  }
+  if (filterKey === "PENDING_SHIPMENT") {
+    return shipmentQueueOrders().length;
+  }
+  return adminState.orders.filter((order) => order.status === filterKey).length;
+}
+
+function matchesOrderFilter(order) {
+  if (adminState.orderFilterStatus === "PENDING_SHIPMENT" && !isPendingShipment(order)) {
+    return false;
+  }
+  if (adminState.orderFilterStatus !== "ALL"
+      && adminState.orderFilterStatus !== "PENDING_SHIPMENT"
+      && order.status !== adminState.orderFilterStatus) {
+    return false;
+  }
+
+  const keyword = normalizeText(adminState.orderFilterKeyword);
+  if (!keyword) {
+    return true;
+  }
+
+  const searchPool = [
+    order.orderNo,
+    order.username,
+    order.displayName,
+    order.shippingAddress,
+    order.riskNote,
+    statusLabel(order.status),
+    ...(order.items || []).flatMap((item) => [
+      item.productName,
+      item.productSku,
+    ]),
+  ].join(" ").toLowerCase();
+
+  return searchPool.includes(keyword);
+}
+
+function filteredOrders() {
+  return adminState.orders.filter(matchesOrderFilter);
 }
 
 function renderDashboard() {
@@ -107,16 +199,185 @@ function renderDashboard() {
     host.innerHTML = `<div class="empty-state">管理员登录后会显示平台经营数据。</div>`;
     return;
   }
-  const dashboard = adminState.dashboard;
+
   host.innerHTML = [
-    metricCard("用户数", dashboard.userCount),
-    metricCard("商品数", dashboard.productCount),
-    metricCard("订单数", dashboard.orderCount),
-    metricCard("累计销售额", money(dashboard.totalRevenue)),
-    metricCard("知识文档", dashboard.knowledgeDocumentCount),
-    metricCard("低库存商品", dashboard.lowStockProductCount),
-    metricCard("待发货订单", dashboard.pendingShipmentCount),
+    metricCard("用户数", adminState.dashboard.userCount),
+    metricCard("商品数", adminState.dashboard.productCount),
+    metricCard("订单数", adminState.dashboard.orderCount),
+    metricCard("累计销售额", money(adminState.dashboard.totalRevenue)),
+    metricCard("退款审核", refundQueueOrders().length),
+    metricCard("待发货订单", shipmentQueueOrders().length),
+    metricCard("低库存商品", lowStockProducts().length),
+    metricCard("知识文档", adminState.dashboard.knowledgeDocumentCount),
   ].join("");
+}
+
+function renderRefundQueue() {
+  const host = adminById("refundQueueList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看退款审核队列。</div>`;
+    return;
+  }
+
+  const queue = refundQueueOrders();
+  if (!queue.length) {
+    host.innerHTML = `<div class="empty-state">当前没有待审核的退款申请。</div>`;
+    return;
+  }
+
+  host.innerHTML = queue.map((order) => `
+    <article class="queue-card">
+      <div class="row-top">
+        <div>
+          <strong>${escapeHtml(order.orderNo)}</strong>
+          <div class="inline-meta">${escapeHtml(order.displayName)} / ${escapeHtml(order.username)}</div>
+        </div>
+        <div class="tag danger">${escapeHtml(statusLabel(order.status))}</div>
+      </div>
+      <div class="queue-meta">
+        <div class="inline-meta">金额 ${money(order.totalAmount)}</div>
+        <div class="inline-meta">创建时间 ${formatDateTime(order.createdAt)}</div>
+      </div>
+      <div class="order-items">
+        ${(order.items || []).map((item) => `
+          <div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity}</div>
+        `).join("")}
+      </div>
+      <textarea class="ops-refund-note-input" data-order-id="${order.id}" placeholder="审核意见，例如同意退款原因或驳回说明"></textarea>
+      <div class="order-actions">
+        <button type="button" class="primary ops-refund-btn" data-order-id="${order.id}" data-approved="true">通过退款</button>
+        <button type="button" class="ghost ops-refund-btn" data-order-id="${order.id}" data-approved="false">驳回退款</button>
+        <button type="button" class="ghost ops-focus-order-btn" data-order-no="${escapeHtml(order.orderNo)}" data-order-filter="REFUND_REQUESTED">定位订单</button>
+      </div>
+    </article>
+  `).join("");
+
+  host.querySelectorAll(".ops-refund-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => reviewRefund(
+      Number(button.dataset.orderId),
+      button.dataset.approved === "true",
+      readRefundQueueNote(Number(button.dataset.orderId)),
+    )));
+  });
+  bindFocusOrderButtons(host);
+}
+
+function renderShipmentQueue() {
+  const host = adminById("shipmentQueueList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看待发货队列。</div>`;
+    return;
+  }
+
+  const queue = shipmentQueueOrders();
+  if (!queue.length) {
+    host.innerHTML = `<div class="empty-state">当前没有待发货或处理中订单。</div>`;
+    return;
+  }
+
+  host.innerHTML = queue.map((order) => `
+    <article class="queue-card">
+      <div class="row-top">
+        <div>
+          <strong>${escapeHtml(order.orderNo)}</strong>
+          <div class="inline-meta">${escapeHtml(order.displayName)} / ${escapeHtml(order.username)}</div>
+        </div>
+        <div class="tag warning">${escapeHtml(statusLabel(order.status))}</div>
+      </div>
+      <div class="queue-meta">
+        <div class="inline-meta">金额 ${money(order.totalAmount)}</div>
+        <div class="inline-meta">地址 ${escapeHtml(order.shippingAddress || "待补充地址")}</div>
+      </div>
+      <div class="order-items">
+        ${(order.items || []).map((item) => `
+          <div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity}</div>
+        `).join("")}
+      </div>
+      <div class="order-actions">
+        ${renderShipmentActions(order)}
+        <button type="button" class="ghost ops-focus-order-btn" data-order-no="${escapeHtml(order.orderNo)}" data-order-filter="PENDING_SHIPMENT">定位订单</button>
+      </div>
+    </article>
+  `).join("");
+
+  host.querySelectorAll(".ops-ship-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => updateOrderStatus(
+      Number(button.dataset.orderId),
+      button.dataset.nextStatus,
+      button.dataset.note,
+    )));
+  });
+  bindFocusOrderButtons(host);
+}
+
+function renderShipmentActions(order) {
+  if (order.status === "CONFIRMED") {
+    return `
+      <button type="button" class="primary ops-ship-btn" data-order-id="${order.id}" data-next-status="PROCESSING" data-note="工作台快速推进：开始处理">开始处理</button>
+      <button type="button" class="ghost ops-ship-btn" data-order-id="${order.id}" data-next-status="SHIPPED" data-note="工作台快速推进：直接标记已发货">直接发货</button>
+    `;
+  }
+  if (order.status === "PROCESSING") {
+    return `
+      <button type="button" class="primary ops-ship-btn" data-order-id="${order.id}" data-next-status="SHIPPED" data-note="工作台快速推进：处理完成并发货">标记发货</button>
+    `;
+  }
+  return "";
+}
+
+function renderLowStockList() {
+  const host = adminById("lowStockList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看库存预警。</div>`;
+    return;
+  }
+
+  const products = lowStockProducts();
+  if (!products.length) {
+    host.innerHTML = `<div class="empty-state">当前没有低库存商品，库存状态比较健康。</div>`;
+    return;
+  }
+
+  host.innerHTML = products.map((product) => `
+    <article class="queue-card">
+      <div class="row-top">
+        <div class="thumb-row">
+          <img src="${escapeHtml(product.imageUrl || "/favicon.svg")}" alt="${escapeHtml(product.name)}">
+          <div>
+            <strong>${escapeHtml(product.name)}</strong>
+            <div class="inline-meta">${escapeHtml(product.sku)} · ${escapeHtml(product.category || "未分类")}</div>
+          </div>
+        </div>
+        <div class="tag warning">库存 ${escapeHtml(product.stock)}</div>
+      </div>
+      <div class="queue-meta">
+        <div class="inline-meta">价格 ${money(product.price)}</div>
+        <div class="inline-meta">${escapeHtml(product.description || "暂无描述")}</div>
+      </div>
+      <div class="order-actions">
+        <button type="button" class="primary ops-edit-product-btn" data-product-id="${product.id}">编辑库存</button>
+      </div>
+    </article>
+  `).join("");
+
+  host.querySelectorAll(".ops-edit-product-btn").forEach((button) => {
+    button.addEventListener("click", () => fillProductForm(Number(button.dataset.productId), true));
+  });
+}
+
+function renderOperationsWorkbench() {
+  renderRefundQueue();
+  renderShipmentQueue();
+  renderLowStockList();
 }
 
 function renderProducts() {
@@ -132,11 +393,21 @@ function renderProducts() {
     host.innerHTML = `<div class="empty-state">当前还没有商品。</div>`;
     return;
   }
-  host.innerHTML = adminState.products.map((product) => `
+
+  const products = [...adminState.products].sort((left, right) => {
+    const leftStock = Number(left.stock || 0);
+    const rightStock = Number(right.stock || 0);
+    if ((leftStock <= 5) !== (rightStock <= 5)) {
+      return leftStock <= 5 ? -1 : 1;
+    }
+    return leftStock - rightStock;
+  });
+
+  host.innerHTML = products.map((product) => `
     <div class="table-row">
       <div class="row-top">
         <div class="thumb-row">
-          <img src="${product.imageUrl}" alt="${escapeHtml(product.name)}">
+          <img src="${escapeHtml(product.imageUrl || "/favicon.svg")}" alt="${escapeHtml(product.name)}">
           <div>
             <strong>${escapeHtml(product.name)}</strong>
             <div class="inline-meta">${escapeHtml(product.sku)} · ${escapeHtml(product.category || "未分类")}</div>
@@ -146,13 +417,46 @@ function renderProducts() {
       </div>
       <div class="row-bottom">
         <div class="inline-meta">${escapeHtml(product.description || "暂无描述")}</div>
-        <div class="tag ${product.stock <= 5 ? "warning" : ""}">${money(product.price)} · 库存 ${product.stock}</div>
+        <div class="tag ${Number(product.stock || 0) <= 5 ? "warning" : ""}">${money(product.price)} · 库存 ${escapeHtml(product.stock)}</div>
       </div>
     </div>
   `).join("");
+
   host.querySelectorAll(".edit-product-btn").forEach((button) => {
-    button.addEventListener("click", () => fillProductForm(Number(button.dataset.productId)));
+    button.addEventListener("click", () => fillProductForm(Number(button.dataset.productId), true));
   });
+}
+
+function renderOrderFilterTabs() {
+  const host = adminById("adminOrderFilterTabs");
+  const summary = adminById("orderFilterSummary");
+  if (!host || !summary) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = "";
+    summary.textContent = "登录后可按履约状态和关键词筛选订单。";
+    return;
+  }
+
+  host.innerHTML = ORDER_FILTERS.map((filter) => `
+    <button type="button" class="${adminState.orderFilterStatus === filter.key ? "active" : ""}" data-order-filter-key="${filter.key}">
+      ${escapeHtml(filter.label)} · ${orderFilterCount(filter.key)}
+    </button>
+  `).join("");
+
+  host.querySelectorAll("[data-order-filter-key]").forEach((button) => {
+    button.addEventListener("click", () => {
+      adminState.orderFilterStatus = button.dataset.orderFilterKey;
+      renderOrderFilterTabs();
+      renderOrders();
+    });
+  });
+
+  const resultCount = filteredOrders().length;
+  const filterLabel = ORDER_FILTERS.find((item) => item.key === adminState.orderFilterStatus)?.label || "全部订单";
+  const keyword = adminState.orderFilterKeyword ? `，关键词“${adminState.orderFilterKeyword}”` : "";
+  summary.textContent = `当前筛选：${filterLabel}${keyword}，共命中 ${resultCount} 条订单。`;
 }
 
 function renderOrders() {
@@ -164,45 +468,53 @@ function renderOrders() {
     host.innerHTML = `<div class="empty-state">管理员登录后可查看订单。</div>`;
     return;
   }
-  if (!adminState.orders.length) {
-    host.innerHTML = `<div class="empty-state">暂时没有订单数据。</div>`;
+
+  const orders = filteredOrders();
+  if (!orders.length) {
+    host.innerHTML = `<div class="empty-state">当前筛选条件下没有订单，换个状态或关键词再试试。</div>`;
     return;
   }
-  host.innerHTML = adminState.orders.map((order) => `
+
+  host.innerHTML = orders.map((order) => `
     <div class="table-row">
       <div class="row-top">
         <div>
           <strong>${escapeHtml(order.orderNo)}</strong>
-          <div class="inline-meta">${escapeHtml(order.displayName)} / ${escapeHtml(order.username)}</div>
+          <div class="inline-meta">${escapeHtml(order.displayName || order.username)} / ${escapeHtml(order.username)}</div>
         </div>
-        <div class="tag ${order.status === "REFUND_REQUESTED" ? "danger" : order.status === "REFUNDED" ? "success" : ""}">
-          ${escapeHtml(statusLabel(order.status))}
-        </div>
+        <div class="tag ${orderTagClass(order.status)}">${escapeHtml(statusLabel(order.status))}</div>
       </div>
       <div class="row-bottom">
         <div class="inline-meta">创建时间 ${formatDateTime(order.createdAt)}</div>
-        <div class="inline-meta">金额 ${money(order.totalAmount)} · 地址 ${escapeHtml(order.shippingAddress)}</div>
+        <div class="inline-meta">金额 ${money(order.totalAmount)} · 地址 ${escapeHtml(order.shippingAddress || "待补充地址")}</div>
       </div>
       ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
       <div class="order-items">
-        ${(order.items || []).map((item) => `<div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity} · ${money(item.lineTotal)}</div>`).join("")}
+        ${(order.items || []).map((item) => `
+          <div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity} · ${money(item.lineTotal)}</div>
+        `).join("")}
       </div>
       ${renderAdminOrderControls(order)}
     </div>
   `).join("");
+
   host.querySelectorAll(".save-order-status-btn").forEach((button) => {
-    button.addEventListener("click", () => updateOrderStatus(Number(button.dataset.orderId)));
+    button.addEventListener("click", () => runAdminAction(() => updateOrderStatus(Number(button.dataset.orderId))));
   });
   host.querySelectorAll(".refund-review-btn").forEach((button) => {
-    button.addEventListener("click", () => reviewRefund(Number(button.dataset.orderId), button.dataset.approved === "true"));
+    button.addEventListener("click", () => runAdminAction(() => reviewRefund(
+      Number(button.dataset.orderId),
+      button.dataset.approved === "true",
+    )));
   });
 }
 
 function renderAdminOrderControls(order) {
   const nextStatuses = availableNextStatuses(order.status);
   const notePlaceholder = order.status === "REFUND_REQUESTED"
-    ? "审核意见，例如同意退款或驳回原因"
+    ? "审核意见，例如同意退款原因或驳回说明"
     : "运营备注，例如催发货、用户沟通结果";
+
   if (order.status === "REFUND_REQUESTED") {
     return `
       <div class="order-action-block">
@@ -211,13 +523,15 @@ function renderAdminOrderControls(order) {
           <button type="button" class="primary refund-review-btn" data-order-id="${order.id}" data-approved="true">同意退款</button>
           <button type="button" class="ghost refund-review-btn" data-order-id="${order.id}" data-approved="false">驳回退款</button>
         </div>
-        <div class="panel-hint">同意退款后订单会进入“已退款”，库存会自动回补；驳回后订单回到“已完成”。</div>
+        <div class="panel-hint">同意退款后订单会变成“已退款”并回补库存；驳回后订单会回到“已完成”。</div>
       </div>
     `;
   }
+
   if (!nextStatuses.length) {
-    return `<div class="panel-hint">当前订单已到最终态，暂无进一步履约动作。</div>`;
+    return `<div class="panel-hint">当前订单已经进入最终状态，暂无可继续推进的履约动作。</div>`;
   }
+
   return `
     <div class="order-action-block">
       <textarea class="admin-order-note-input" data-order-id="${order.id}" placeholder="${escapeHtml(notePlaceholder)}"></textarea>
@@ -227,7 +541,7 @@ function renderAdminOrderControls(order) {
         </select>
         <button type="button" class="primary save-order-status-btn" data-order-id="${order.id}">推进订单</button>
       </div>
-      <div class="panel-hint">这里只展示符合当前状态的下一步动作，避免误操作破坏订单流转。</div>
+      <div class="panel-hint">这里只显示符合当前状态的下一步动作，减少误操作导致的流程跳跃。</div>
     </div>
   `;
 }
@@ -259,9 +573,10 @@ function renderKnowledgeDocs() {
     return;
   }
   if (!adminState.knowledgeDocs.length) {
-    host.innerHTML = `<div class="empty-state">还没有知识文档，先导入一条售后或物流规则。</div>`;
+    host.innerHTML = `<div class="empty-state">还没有知识文档，先导入一条售后、物流或商品规则。</div>`;
     return;
   }
+
   host.innerHTML = adminState.knowledgeDocs.map((doc) => `
     <div class="knowledge-item">
       <div class="row-top">
@@ -283,13 +598,14 @@ function renderKnowledgeSearchResults() {
     return;
   }
   if (!adminState.knowledgeSearchKeyword) {
-    host.innerHTML = `<div class="empty-state">输入关键词，看看 AI 客服能从知识库召回哪些片段。</div>`;
+    host.innerHTML = `<div class="empty-state">输入关键词，看看 AI 客服会命中哪些知识片段。</div>`;
     return;
   }
   if (!adminState.knowledgeMatches.length) {
-    host.innerHTML = `<div class="empty-state">没有命中相关知识片段，换个关键词试试。</div>`;
+    host.innerHTML = `<div class="empty-state">没有命中相关知识片段，换个关键词再试试。</div>`;
     return;
   }
+
   host.innerHTML = adminState.knowledgeMatches.map((match) => `
     <div class="knowledge-item knowledge-match">
       <div class="row-top">
@@ -310,10 +626,15 @@ function renderUsers() {
     host.innerHTML = `<div class="empty-state">登录后可查看用户。</div>`;
     return;
   }
+  if (!adminState.users.length) {
+    host.innerHTML = `<div class="empty-state">当前还没有可显示的用户。</div>`;
+    return;
+  }
+
   host.innerHTML = adminState.users.map((user) => `
     <div class="user-row">
       <div class="row-top">
-        <strong>${escapeHtml(user.displayName)}</strong>
+        <strong>${escapeHtml(user.displayName || user.username)}</strong>
         <div class="tag">${escapeHtml(user.role)}</div>
       </div>
       <div class="inline-meta">${escapeHtml(user.username)}</div>
@@ -334,20 +655,24 @@ function resetProductForm() {
   adminById("productDescription").value = "";
 }
 
-function fillProductForm(productId) {
+function fillProductForm(productId, scrollIntoView = false) {
   const product = adminState.products.find((item) => item.id === productId);
   if (!product) {
     return;
   }
   adminState.editingProductId = product.id;
   adminById("productFormTitle").textContent = `编辑商品 · ${product.name}`;
-  adminById("productSku").value = product.sku;
-  adminById("productName").value = product.name;
+  adminById("productSku").value = product.sku || "";
+  adminById("productName").value = product.name || "";
   adminById("productCategory").value = product.category || "";
-  adminById("productPrice").value = product.price;
-  adminById("productStock").value = product.stock;
+  adminById("productPrice").value = product.price ?? "";
+  adminById("productStock").value = product.stock ?? "";
   adminById("productImageUrl").value = product.imageUrl || "";
   adminById("productDescription").value = product.description || "";
+
+  if (scrollIntoView) {
+    adminById("productForm")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 async function loadAdminMe() {
@@ -363,16 +688,31 @@ async function loadAdminMe() {
   setAdminStatus(`管理员已登录：${adminState.user.displayName || adminState.user.username}`);
 }
 
+function clearAdminDataState() {
+  adminState.dashboard = null;
+  adminState.products = [];
+  adminState.orders = [];
+  adminState.knowledgeDocs = [];
+  adminState.knowledgeMatches = [];
+  adminState.knowledgeSearchKeyword = "";
+  adminState.users = [];
+  adminState.editingProductId = null;
+}
+
 async function loadAdminData() {
   if (!adminState.user || adminState.user.role !== "ADMIN") {
+    clearAdminDataState();
     renderDashboard();
+    renderOperationsWorkbench();
     renderProducts();
+    renderOrderFilterTabs();
     renderOrders();
     renderKnowledgeDocs();
     renderKnowledgeSearchResults();
     renderUsers();
     return;
   }
+
   const [dashboard, products, orders, knowledgeDocs, users] = await Promise.all([
     adminFetchJson("/api/admin/dashboard"),
     adminFetchJson("/api/admin/products"),
@@ -380,13 +720,17 @@ async function loadAdminData() {
     adminFetchJson("/api/admin/knowledge/documents"),
     adminFetchJson("/api/admin/users"),
   ]);
+
   adminState.dashboard = dashboard;
   adminState.products = products || [];
   adminState.orders = orders || [];
   adminState.knowledgeDocs = knowledgeDocs || [];
   adminState.users = users || [];
+
   renderDashboard();
+  renderOperationsWorkbench();
   renderProducts();
+  renderOrderFilterTabs();
   renderOrders();
   renderKnowledgeDocs();
   renderKnowledgeSearchResults();
@@ -409,7 +753,9 @@ async function adminLogin() {
 async function adminLogout() {
   await adminFetchJson("/api/auth/logout", { method: "POST" });
   adminState.user = null;
-  await bootstrapAdmin();
+  clearAdminDataState();
+  await loadAdminData();
+  setAdminStatus("已退出管理员账号");
 }
 
 async function saveProduct(event) {
@@ -434,21 +780,34 @@ async function saveProduct(event) {
   });
   resetProductForm();
   await loadAdminData();
+  setAdminStatus("商品信息已保存");
 }
 
-async function updateOrderStatus(orderId) {
-  const select = document.querySelector(`.order-status-select[data-order-id="${orderId}"]`);
-  const note = readAdminOrderNote(orderId);
+function readAdminOrderNote(orderId) {
+  return document.querySelector(`.admin-order-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readRefundQueueNote(orderId) {
+  return document.querySelector(`.ops-refund-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+async function updateOrderStatus(orderId, explicitStatus = null, explicitNote = null) {
+  const nextStatus = explicitStatus
+    || document.querySelector(`.order-status-select[data-order-id="${orderId}"]`)?.value;
+  if (!nextStatus) {
+    throw new Error("未选择订单状态");
+  }
+  const note = explicitNote ?? readAdminOrderNote(orderId);
   await adminFetchJson(`/api/admin/orders/${orderId}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status: select.value, note }),
+    body: JSON.stringify({ status: nextStatus, note }),
   });
   await loadAdminData();
-  setAdminStatus("订单履约状态已更新");
+  setAdminStatus(`订单状态已更新为 ${statusLabel(nextStatus)}`);
 }
 
-async function reviewRefund(orderId, approved) {
-  const note = readAdminOrderNote(orderId);
+async function reviewRefund(orderId, approved, explicitNote = null) {
+  const note = explicitNote ?? readAdminOrderNote(orderId);
   await adminFetchJson(`/api/admin/orders/${orderId}/refund-review`, {
     method: "PATCH",
     body: JSON.stringify({ approved, note }),
@@ -457,8 +816,39 @@ async function reviewRefund(orderId, approved) {
   setAdminStatus(approved ? "退款申请已通过，库存已回补" : "退款申请已驳回，订单回到已完成");
 }
 
-function readAdminOrderNote(orderId) {
-  return document.querySelector(`.admin-order-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+function focusOrder(orderNo, filterStatus = "ALL") {
+  adminState.orderFilterKeyword = orderNo || "";
+  adminState.orderFilterStatus = filterStatus || "ALL";
+  if (adminById("adminOrderSearchInput")) {
+    adminById("adminOrderSearchInput").value = adminState.orderFilterKeyword;
+  }
+  renderOrderFilterTabs();
+  renderOrders();
+  adminById("orderManagement")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function bindFocusOrderButtons(host) {
+  host.querySelectorAll(".ops-focus-order-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      focusOrder(button.dataset.orderNo || "", button.dataset.orderFilter || "ALL");
+    });
+  });
+}
+
+function applyOrderSearch() {
+  adminState.orderFilterKeyword = adminById("adminOrderSearchInput")?.value?.trim() || "";
+  renderOrderFilterTabs();
+  renderOrders();
+}
+
+function clearOrderFilters() {
+  adminState.orderFilterKeyword = "";
+  adminState.orderFilterStatus = "ALL";
+  if (adminById("adminOrderSearchInput")) {
+    adminById("adminOrderSearchInput").value = "";
+  }
+  renderOrderFilterTabs();
+  renderOrders();
 }
 
 async function saveKnowledge(event) {
@@ -478,6 +868,7 @@ async function saveKnowledge(event) {
   if (adminById("knowledgeSearchInput").value.trim()) {
     await searchKnowledge();
   }
+  setAdminStatus("知识文档已导入并同步到检索索引");
 }
 
 async function searchKnowledge() {
@@ -492,7 +883,7 @@ async function searchKnowledge() {
   adminState.knowledgeSearchKeyword = result.keyword || keyword;
   adminState.knowledgeMatches = result.matches || [];
   renderKnowledgeSearchResults();
-  setAdminStatus(`已检索知识库：${adminState.knowledgeSearchKeyword}，命中 ${adminState.knowledgeMatches.length} 条片段`);
+  setAdminStatus(`知识库检索完成：${adminState.knowledgeSearchKeyword}，命中 ${adminState.knowledgeMatches.length} 条片段`);
 }
 
 async function bootstrapAdmin() {
@@ -500,13 +891,6 @@ async function bootstrapAdmin() {
     await loadAdminMe();
   } catch (error) {
     adminState.user = null;
-    adminState.dashboard = null;
-    adminState.products = [];
-    adminState.orders = [];
-    adminState.knowledgeDocs = [];
-    adminState.knowledgeMatches = [];
-    adminState.knowledgeSearchKeyword = "";
-    adminState.users = [];
   }
   await loadAdminData();
 }
@@ -529,6 +913,14 @@ document.addEventListener("DOMContentLoaded", () => {
   adminById("refreshDashboardBtn").addEventListener("click", () => runAdminAction(loadAdminData));
   adminById("productForm").addEventListener("submit", (event) => runAdminAction(() => saveProduct(event)));
   adminById("resetProductBtn").addEventListener("click", resetProductForm);
+  adminById("adminOrderSearchBtn").addEventListener("click", () => runAdminAction(async () => applyOrderSearch()));
+  adminById("clearOrderFiltersBtn").addEventListener("click", clearOrderFilters);
+  adminById("adminOrderSearchInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      runAdminAction(async () => applyOrderSearch());
+    }
+  });
   adminById("knowledgeForm").addEventListener("submit", (event) => runAdminAction(() => saveKnowledge(event)));
   adminById("knowledgeSearchBtn").addEventListener("click", () => runAdminAction(searchKnowledge));
   adminById("knowledgeSearchInput").addEventListener("keydown", (event) => {
