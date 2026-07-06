@@ -78,6 +78,12 @@
             <div id="cartItems" class="stack-list"></div>
             <div class="checkout-box">
               <input id="shippingAddress" type="text" placeholder="本次结算地址，可留空">
+              <div class="promotion-input-row">
+                <input id="promotionCodeInput" type="text" placeholder="输入优惠码，或从下方活动中选择">
+                <button id="clearPromotionBtn" type="button" class="ghost">清空优惠</button>
+              </div>
+              <div id="promotionSummary" class="panel-hint">系统会根据购物车金额推荐当前可用的优惠活动。</div>
+              <div id="promotionList" class="promotion-list"></div>
               <button id="checkoutBtn" type="button" class="primary wide">提交订单</button>
             </div>
           </section>
@@ -114,6 +120,7 @@
               <button type="button" class="prompt-btn" data-prompt="帮我推荐一款适合通勤的商品">推荐商品</button>
               <button type="button" class="prompt-btn" data-prompt="帮我查询最近订单状态">查询订单</button>
               <button type="button" class="prompt-btn" data-prompt="帮我查最近订单的物流信息">查物流</button>
+              <button type="button" class="prompt-btn" data-prompt="现在有什么优惠活动或优惠码可以用">优惠活动</button>
               <button type="button" class="prompt-btn" data-prompt="退款和售后规则是什么">售后规则</button>
               <button type="button" class="prompt-btn" data-prompt="帮我生成一个下单草稿">下单草稿</button>
             </div>

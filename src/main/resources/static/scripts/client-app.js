@@ -5,6 +5,9 @@ const clientState = {
   category: "全部",
   orders: [],
   cart: { items: [], totalAmount: 0, totalItems: 0 },
+  promotions: [],
+  promotionLoadError: "",
+  selectedPromotionCode: "",
   sessions: [],
   sessionId: null,
   threadId: null,
@@ -176,6 +179,53 @@ function currency(value) {
     currency: "CNY",
     minimumFractionDigits: 2,
   }).format(value || 0);
+}
+
+function normalizePromotionCode(value) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+function cartSubtotal() {
+  return Number(clientState.cart?.totalAmount || 0);
+}
+
+function currentPromotionCode() {
+  return normalizePromotionCode(clientById("promotionCodeInput")?.value || clientState.selectedPromotionCode);
+}
+
+function selectedPromotion() {
+  const code = currentPromotionCode();
+  if (!code) {
+    return null;
+  }
+  return clientState.promotions.find((promotion) => normalizePromotionCode(promotion.code) === code) || null;
+}
+
+function syncPromotionInput(code = "") {
+  const normalized = normalizePromotionCode(code);
+  clientState.selectedPromotionCode = normalized;
+  const input = clientById("promotionCodeInput");
+  if (input && input.value !== normalized) {
+    input.value = normalized;
+  }
+}
+
+function promotionDiscountLabel(promotion) {
+  if (!promotion) {
+    return "";
+  }
+  if (promotion.discountType === "PERCENT") {
+    return `减免 ${Number(promotion.discountValue || 0)}%`;
+  }
+  return `立减 ${currency(promotion.discountValue || 0)}`;
+}
+
+function promotionThresholdLabel(promotion) {
+  return `满 ${currency(promotion.minOrderAmount || 0)} 可用`;
+}
+
+function promotionExpiryLabel(promotion) {
+  return promotion?.expiresAt ? `截止 ${formatMessageTime(promotion.expiresAt)}` : "长期有效";
 }
 
 function ratingLabel(value) {
@@ -797,6 +847,11 @@ function renderCatalogExperience() {
   maybeLoadSelectedProductReviews();
 }
 
+function renderCartExperience() {
+  renderCart();
+  renderPromotions();
+}
+
 function renderCart() {
   const host = clientById("cartItems");
   const summary = clientById("cartSummary");
@@ -838,6 +893,94 @@ function renderCart() {
   });
   host.querySelectorAll(".cart-remove-btn").forEach((button) => {
     button.addEventListener("click", () => removeCartItem(Number(button.dataset.itemId)));
+  });
+}
+
+function renderPromotions() {
+  const host = clientById("promotionList");
+  const summary = clientById("promotionSummary");
+  if (!host || !summary) {
+    return;
+  }
+
+  const subtotal = cartSubtotal();
+  const selected = selectedPromotion();
+  const selectedCode = currentPromotionCode();
+
+  if (!clientState.user) {
+    summary.textContent = "登录后系统会结合购物车金额推荐当前可用的优惠活动。";
+    host.innerHTML = `<div class="empty-state">先登录并加入商品，结算区会显示可用优惠码和预计减免。</div>`;
+    return;
+  }
+
+  if (!clientState.cart?.items?.length) {
+    summary.textContent = "购物车有商品后，这里会根据当前金额显示满减和折扣活动。";
+    host.innerHTML = `<div class="empty-state">还没有可结算商品，先把心仪商品加入购物车吧。</div>`;
+    return;
+  }
+
+  if (clientState.promotionLoadError) {
+    summary.textContent = "优惠活动暂时加载失败，仍然可以手动输入优惠码并继续结算。";
+    host.innerHTML = `<div class="empty-state">${escapeHtml(clientState.promotionLoadError)}</div>`;
+    return;
+  }
+
+  if (!clientState.promotions.length) {
+    summary.textContent = selectedCode
+      ? `已填写优惠码 ${selectedCode}，提交订单时会再次校验。`
+      : "当前没有正在展示的优惠活动，也可以手动输入优惠码尝试结算。";
+    host.innerHTML = `<div class="empty-state">暂时没有可展示的活动，仍可手动输入优惠码结算。</div>`;
+    return;
+  }
+
+  const applicablePromotions = clientState.promotions.filter((promotion) => promotion.applicable);
+  if (selected) {
+    summary.textContent = selected.applicable
+      ? `已选择 ${selected.code}，预计优惠 ${currency(selected.estimatedDiscountAmount || 0)}，到手约 ${currency(Math.max(0, subtotal - Number(selected.estimatedDiscountAmount || 0)))}` 
+      : `已选择 ${selected.code}，当前条件下 ${selected.applyHint}`;
+  } else if (selectedCode) {
+    summary.textContent = `已填写优惠码 ${selectedCode}，提交订单时会再次校验是否有效。`;
+  } else if (applicablePromotions.length) {
+    const bestDiscount = Math.max(...applicablePromotions.map((promotion) => Number(promotion.estimatedDiscountAmount || 0)));
+    summary.textContent = `当前金额可用 ${applicablePromotions.length} 个活动，最高预计优惠 ${currency(bestDiscount)}。`;
+  } else {
+    summary.textContent = "活动已加载，但当前购物车金额还没达到可用门槛。";
+  }
+
+  host.innerHTML = clientState.promotions.map((promotion) => {
+    const active = normalizePromotionCode(promotion.code) === selectedCode;
+    const estimatedDiscount = Number(promotion.estimatedDiscountAmount || 0);
+    const hintClass = promotion.applicable ? "success" : "info";
+    return `
+      <article class="promotion-option ${active ? "active" : ""}">
+        <div class="row-top">
+          <div>
+            <strong>${escapeHtml(promotion.title || promotion.code)}</strong>
+            <div class="inline-meta">${escapeHtml(promotion.code)} · ${escapeHtml(promotionDiscountLabel(promotion))}</div>
+          </div>
+          <div class="tag ${promotion.applicable ? "success" : ""}">${promotion.applicable ? "可使用" : "未达门槛"}</div>
+        </div>
+        ${promotion.description ? `<div class="panel-hint">${escapeHtml(promotion.description)}</div>` : ""}
+        <div class="promotion-meta-row">
+          <span class="tag">${escapeHtml(promotionThresholdLabel(promotion))}</span>
+          <span class="tag">${escapeHtml(promotionExpiryLabel(promotion))}</span>
+          ${promotion.applicable ? `<span class="tag success">预计减 ${currency(estimatedDiscount)}</span>` : ""}
+        </div>
+        <div class="row-bottom">
+          <div class="panel-hint ${hintClass}">${escapeHtml(promotion.applyHint || "提交订单时校验")}</div>
+          <button type="button" class="${active ? "secondary" : "ghost"} promotion-select-btn" data-promotion-code="${escapeHtml(promotion.code)}">
+            ${active ? "已选择" : "使用活动"}
+          </button>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  host.querySelectorAll(".promotion-select-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      syncPromotionInput(button.dataset.promotionCode || "");
+      renderPromotions();
+    });
   });
 }
 
@@ -902,6 +1045,7 @@ function renderOrders() {
       <div class="order-summary">
         <div class="inline-meta">状态编码 ${escapeHtml(order.status)}</div>
         <div class="inline-meta">金额 ${currency(order.totalAmount)}</div>
+        ${renderOrderPromotionMeta(order)}
         <div class="inline-meta">地址 ${escapeHtml(order.shippingAddress || "待补充收货地址")}</div>
         ${renderOrderPaymentMeta(order)}
         ${renderOrderShippingMeta(order)}
@@ -1080,6 +1224,20 @@ function renderOrderPaymentMeta(order) {
     lines.push(`<div class="inline-meta">支付时间 ${escapeHtml(new Date(order.paidAt).toLocaleString("zh-CN"))}</div>`);
   } else if (order.status === "PENDING_PAYMENT") {
     lines.push(`<div class="inline-meta">支付状态 待完成模拟支付</div>`);
+  }
+  return lines.join("");
+}
+
+function renderOrderPromotionMeta(order) {
+  const lines = [];
+  if (Number(order.originalAmount || 0) > 0 && Number(order.originalAmount || 0) !== Number(order.totalAmount || 0)) {
+    lines.push(`<div class="inline-meta">原价 ${currency(order.originalAmount)}</div>`);
+  }
+  if (Number(order.discountAmount || 0) > 0) {
+    lines.push(`<div class="inline-meta">优惠减免 ${currency(order.discountAmount)}</div>`);
+  }
+  if (order.promotionCode || order.promotionTitle) {
+    lines.push(`<div class="inline-meta">活动 ${escapeHtml(order.promotionTitle || order.promotionCode)}${order.promotionCode ? ` · ${escapeHtml(order.promotionCode)}` : ""}</div>`);
   }
   return lines.join("");
 }
@@ -1352,11 +1510,23 @@ async function loadCatalog() {
 async function loadCart() {
   if (!clientState.user) {
     clientState.cart = { items: [], totalAmount: 0, totalItems: 0 };
-    renderCart();
+    await loadPromotions();
+    renderCartExperience();
     return;
   }
   clientState.cart = await clientFetchJson("/api/cart");
-  renderCart();
+  await loadPromotions();
+  renderCartExperience();
+}
+
+async function loadPromotions() {
+  try {
+    clientState.promotions = await clientFetchJson(`/api/promotions?subtotal=${encodeURIComponent(cartSubtotal().toFixed(2))}`);
+    clientState.promotionLoadError = "";
+  } catch (error) {
+    clientState.promotions = [];
+    clientState.promotionLoadError = `优惠活动接口暂时不可用${error?.message ? `：${error.message}` : ""}，请稍后刷新或在后端重启完成后再试。`;
+  }
 }
 
 async function loadOrders() {
@@ -1529,12 +1699,15 @@ async function checkout() {
   if (!clientState.user) {
     throw new Error("请先登录再提交订单");
   }
+  const promotionCode = currentPromotionCode();
   await clientFetchJson("/api/cart/checkout", {
     method: "POST",
     body: JSON.stringify({
       shippingAddress: clientById("shippingAddress").value.trim(),
+      promotionCode: promotionCode || null,
     }),
   });
+  syncPromotionInput("");
   setStoreStatus("订单已创建，待支付订单会出现在订单列表里");
   await Promise.all([loadCart(), loadOrders(), loadCatalog()]);
 }
@@ -1779,6 +1952,14 @@ document.addEventListener("DOMContentLoaded", () => {
     clientById("loginPassword").value = "demo123";
   });
   clientById("checkoutBtn").addEventListener("click", () => runClientAction(checkout));
+  clientById("promotionCodeInput").addEventListener("input", (event) => {
+    syncPromotionInput(event.target.value || "");
+    renderPromotions();
+  });
+  clientById("clearPromotionBtn").addEventListener("click", () => {
+    syncPromotionInput("");
+    renderPromotions();
+  });
   clientById("assistantSendBtn").addEventListener("click", () => runClientAction(() => sendAssistantMessage("")));
   clientById("assistantEscalateBtn").addEventListener("click", () => runClientAction(requestHumanSupport));
   clientById("assistantInput").addEventListener("keydown", (event) => {

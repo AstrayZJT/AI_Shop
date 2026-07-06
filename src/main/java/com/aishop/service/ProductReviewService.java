@@ -44,14 +44,14 @@ public class ProductReviewService {
     public List<ProductReviewResponse> listProductReviews(Long productId) {
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new IllegalArgumentException("商品不存在"));
-        return reviewRepository.findByProductOrderByCreatedAtDesc(product).stream()
+        return reviewRepository.findByProductOrderByIdDesc(product).stream()
                 .map(this::toResponse)
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public List<ProductReviewResponse> listRecentReviews() {
-        return reviewRepository.findTop30ByOrderByCreatedAtDesc().stream()
+        return reviewRepository.findTop30ByOrderByIdDesc().stream()
                 .map(this::toResponse)
                 .toList();
     }
@@ -110,7 +110,7 @@ public class ProductReviewService {
 
     @Transactional(readOnly = true)
     public String reviewSummary(Product product) {
-        List<ProductReview> reviews = reviewRepository.findTop3ByProductOrderByCreatedAtDesc(product);
+        List<ProductReview> reviews = reviewRepository.findTop3ByProductOrderByIdDesc(product);
         if (reviews.isEmpty()) {
             return null;
         }

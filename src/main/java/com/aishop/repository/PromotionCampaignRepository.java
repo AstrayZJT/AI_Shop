@@ -9,5 +9,5 @@ import com.aishop.domain.PromotionCampaign;
 
 public interface PromotionCampaignRepository extends JpaRepository<PromotionCampaign, Long> {
     Optional<PromotionCampaign> findByCodeIgnoreCase(String code);
-    List<PromotionCampaign> findAllByOrderByCreatedAtDesc();
+    List<PromotionCampaign> findAllByOrderByIdDesc();
 }

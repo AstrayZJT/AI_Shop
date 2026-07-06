@@ -16,10 +16,10 @@ import com.aishop.domain.ProductReview;
 public interface ProductReviewRepository extends JpaRepository<ProductReview, Long> {
 
     @EntityGraph(attributePaths = {"product", "user", "order", "orderItem"})
-    List<ProductReview> findByProductOrderByCreatedAtDesc(Product product);
+    List<ProductReview> findByProductOrderByIdDesc(Product product);
 
     @EntityGraph(attributePaths = {"product", "user", "order", "orderItem"})
-    List<ProductReview> findTop30ByOrderByCreatedAtDesc();
+    List<ProductReview> findTop30ByOrderByIdDesc();
 
     Optional<ProductReview> findByOrderItemAndUser(OrderItem orderItem, AppUser user);
 
@@ -29,5 +29,5 @@ public interface ProductReviewRepository extends JpaRepository<ProductReview, Lo
     Double averageRatingByProduct(@Param("product") Product product);
 
     @EntityGraph(attributePaths = {"user"})
-    List<ProductReview> findTop3ByProductOrderByCreatedAtDesc(Product product);
+    List<ProductReview> findTop3ByProductOrderByIdDesc(Product product);
 }

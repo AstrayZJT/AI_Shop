@@ -4,9 +4,9 @@
 
 当前项目已经不是最早的“聊天演示页”了，而是一个继续在同一仓库内扩展出来的完整业务雏形：
 
-- 客户端：注册、登录、商品浏览、场景化选品推荐、购物车、下单、订单查询、地址维护、AI 客服
-- 管理端：商品管理、订单履约、售后工作台、退款审核、知识库导入、用户查看、AI 会话接管
-- AI 客服：商品推荐、订单查询、订单动作代办、RAG 检索、人工转接、后台人工回复回流
+- 客户端：注册、登录、商品浏览、场景化选品推荐、购物车、优惠码结算、下单、订单查询、地址维护、AI 客服
+- 管理端：商品管理、营销活动管理、订单履约、售后工作台、退款审核、知识库导入、用户查看、AI 会话接管
+- AI 客服：商品推荐、订单查询、订单动作代办、优惠活动问答、RAG 检索、人工转接、后台人工回复回流
 
 ## 1. 当前架构
 
@@ -63,6 +63,8 @@ $env:SHOP_AI_ENABLED="false"
 - embedding 也不是真实语义向量，而是本地 64 维简化向量
 - 向量检索走的是内存向量存储，不是 pgvector
 - 但知识库原文、切块文本、embedding 缓存仍然会落业务表，便于联调整个流程
+- 你在控制台里看不到真实远程模型的请求 / 响应日志
+- 如果只看“页面能聊、AI 有回复”，并不能说明你已经接上了真模型
 
 适合场景：
 
@@ -79,6 +81,11 @@ $env:SHOP_AI_ENABLED="false"
 一句话概括：
 
 本地联调模式能跑业务，但它不代表真实 AI 能力。
+
+再强调一遍：
+
+- `SHOP_AI_ENABLED=false` 时，项目是“能联调业务流程的本地假模型模式”
+- 它适合开发，不适合拿来证明“项目已经接入真实 AI”
 
 ### 3.2 真实 AI 模型模式
 
@@ -105,12 +112,20 @@ $env:OPENAI_API_KEY="你的 Key"
 
 也就是说，代码层面用的是 OpenAI 兼容客户端，但你实际可以接的是 DashScope 的兼容接口。
 
+真正决定“有没有启用真实模型 Bean”的开关是：
+
+- `shop.ai.enabled`
+- 它通过环境变量 `SHOP_AI_ENABLED` 注入
+
+也就是说，判断当前进程是不是“真 AI 模式”，不要只看 `application.yml` 里写了模型名，更要看你启动进程时到底有没有把这些环境变量带进去。
+
 这个模式下的特点：
 
 - 聊天回复会真实调用远程模型
 - embedding 会真实调用远程向量模型
 - 如果当前向量数据源是 PostgreSQL，则会使用 pgvector 存储向量索引
 - 控制台会输出模型请求日志和响应日志
+- AI 客服的商品问答、订单问答、优惠活动问答、知识检索，都会走真实模型推理
 
 注意两点：
 
@@ -118,6 +133,14 @@ $env:OPENAI_API_KEY="你的 Key"
 2. `OPENAI_API_KEY` 为空时，应用未必会在启动阶段就报错，但一旦真正调用模型，请求大概率会失败
 
 所以本地开发时建议你明确指定模式，不要靠默认值猜。
+
+如果你要排查“为什么我感觉像没接上真模型”，优先按这个顺序查：
+
+1. `SHOP_AI_ENABLED` 是否真的是 `true`
+2. `OPENAI_API_KEY` 是否在当前启动进程里可见
+3. 你是不是用 IDEA 启动，但只在 PowerShell 里配了变量，没配到 IDEA 的 Run Configuration
+4. 控制台有没有真实模型请求日志
+5. 数据库、网络、Key 权限是否允许 DashScope 兼容接口正常返回
 
 ### 3.3 你的 key 我知不知道
 
@@ -245,6 +268,7 @@ npm run dev
 - 前端开发端口：`5173`
 - 后端 API：`http://localhost:8080`
 - Vite 会把 `/api/*` 自动代理到 Spring Boot
+- 如果你没有显式配置 `VITE_BACKEND_TARGET`，当前版本会自动探测 `8080` 和 `8082`，优先连接能访问到的后端
 
 如果你后端不是 `8080`，可以先在 `frontend/.env` 里配置：
 
@@ -330,9 +354,11 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 商品场景化推荐、推荐理由、选品决策区
 - 从商品卡片快速发起 AI 咨询、同类对比、下单草稿
 - 购物车增删改
+- 购物车优惠码输入、活动推荐、满减 / 折扣估算
 - 结算下单并生成待支付订单
 - 模拟支付，支持模拟支付、支付宝、微信支付、银行卡等支付方式标签
 - 订单列表
+- 订单原价、优惠金额、活动码展示
 - 支付方式、支付流水、支付时间展示
 - 订单履约时间线
 - 物流节点追踪
@@ -348,6 +374,8 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - 仪表盘数据总览
 - 商品新增 / 编辑
+- 营销活动新增 / 编辑
+- 固定金额立减、百分比折扣、门槛金额、到期时间、启停状态管理
 - 商品评分和用户评价查看
 - 待支付订单查看
 - 后台补记支付并推进到待发货
@@ -390,6 +418,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 直接代办确认收货
 - 直接代办申请退款
 - 直接代办修改发货前订单地址
+- 查询当前优惠活动、优惠码、满减门槛和预计优惠
 - 查询知识库中的售后、物流、政策内容
 - 用户主动要求“转人工”后进入人工接管流程
 - 管理端可认领人工会话，并持续查看待处理数和客户未读状态
@@ -474,6 +503,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 购物车项：`cart_items`
 - 订单：`orders`
 - 订单项：`order_items`
+- 营销活动：`promotion_campaigns`
 - AI 下单草稿：`pending_order_drafts`
 - AI 会话：`assistant_sessions`
 - AI 消息：`assistant_messages`
@@ -523,6 +553,7 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - `GET /api/products/{id}/reviews`
 - `GET /api/products/search`
 - `GET /api/categories`
+- `GET /api/promotions`
 - `GET /api/cart`
 - `POST /api/cart/items`
 - `PATCH /api/cart/items/{itemId}`
@@ -559,6 +590,9 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - `GET /api/admin/products`
 - `POST /api/admin/products`
 - `PUT /api/admin/products/{id}`
+- `GET /api/admin/promotions`
+- `POST /api/admin/promotions`
+- `PUT /api/admin/promotions/{id}`
 - `GET /api/admin/orders`
 - `PATCH /api/admin/orders/{id}/status`
 - `PATCH /api/admin/orders/{id}/refund-review`
@@ -601,6 +635,7 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - 或者访问 `http://localhost:5173/admin/index.html`
 - `/api/*` 会由 Vite 代理到 Spring Boot
 - 后端默认允许 `5173` / `4173` 端口跨域携带 cookie
+- 当前 `frontend/` 工程会优先尝试你手动配置的 `VITE_BACKEND_TARGET`；如果没配，就自动探测本机 `8080` / `8082`
 
 ### 12.2 客户端商品推荐怎么理解
 
@@ -650,6 +685,7 @@ mvn -q -DskipTests compile
 - 本地 embedding：`src/main/java/com/aishop/config/LocalEmbeddingConfig.java`
 - 前端跨域与分离开发支持：`src/main/java/com/aishop/config/FrontendCorsConfig.java`
 - AI 客服主逻辑：`src/main/java/com/aishop/service/AssistantService.java`
+- 优惠活动与优惠码：`src/main/java/com/aishop/service/PromotionService.java`
 - 商品评价与口碑：`src/main/java/com/aishop/service/ProductReviewService.java`
 - 管理端客服接管：`src/main/java/com/aishop/service/AdminService.java`
 - RAG 导入与检索：`src/main/java/com/aishop/service/KnowledgeService.java`

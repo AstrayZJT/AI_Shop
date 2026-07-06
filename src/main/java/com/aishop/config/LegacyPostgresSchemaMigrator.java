@@ -31,7 +31,8 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
             "pending_order_drafts",
             "product_categories",
             "product_reviews",
-            "products");
+            "products",
+            "promotion_campaigns");
 
     private final DataSource dataSource;
     private final JdbcTemplate jdbcTemplate;
@@ -52,6 +53,8 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
             return;
         }
 
+        ensurePromotionSchema();
+
         int checkedTables = 0;
         for (String tableName : AUDITED_TABLES) {
             if (!tableExists(tableName)) {
@@ -62,6 +65,7 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
         }
 
         ensureOrderStatusConstraint();
+        ensureOrderPromotionFields();
         ensureAssistantSessionServiceStatus();
         ensureAssistantSessionOpsFields();
 
@@ -111,6 +115,44 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
                     'CANCELLED'
                 ))
                 """);
+    }
+
+    private void ensureOrderPromotionFields() {
+        if (!tableExists("orders")) {
+            return;
+        }
+        jdbcTemplate.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS original_amount NUMERIC(12,2)");
+        jdbcTemplate.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12,2)");
+        jdbcTemplate.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_code VARCHAR(32)");
+        jdbcTemplate.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_title VARCHAR(128)");
+        jdbcTemplate.update("UPDATE orders SET original_amount = COALESCE(original_amount, total_amount) WHERE original_amount IS NULL");
+        jdbcTemplate.update("UPDATE orders SET discount_amount = COALESCE(discount_amount, 0) WHERE discount_amount IS NULL");
+    }
+
+    private void ensurePromotionSchema() {
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS promotion_campaigns (
+                    id BIGSERIAL PRIMARY KEY,
+                    code VARCHAR(32) NOT NULL,
+                    title VARCHAR(128) NOT NULL,
+                    description VARCHAR(1000),
+                    discount_type VARCHAR(16) NOT NULL,
+                    discount_value NUMERIC(12,2) NOT NULL,
+                    min_order_amount NUMERIC(12,2),
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    expires_at TIMESTAMP WITH TIME ZONE
+                )
+                """);
+        jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS code VARCHAR(32)");
+        jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS title VARCHAR(128)");
+        jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS description VARCHAR(1000)");
+        jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS discount_type VARCHAR(16)");
+        jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS discount_value NUMERIC(12,2)");
+        jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS min_order_amount NUMERIC(12,2)");
+        jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS active BOOLEAN");
+        jdbcTemplate.execute("ALTER TABLE promotion_campaigns ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE");
+        jdbcTemplate.update("UPDATE promotion_campaigns SET active = COALESCE(active, TRUE) WHERE active IS NULL");
+        jdbcTemplate.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_promotion_campaigns_code ON promotion_campaigns (code)");
     }
 
     private void ensureAssistantSessionServiceStatus() {

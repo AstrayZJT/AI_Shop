@@ -202,6 +202,49 @@
       </div>
     </section>
 
+    <section class="band">
+      <div class="container split-grid">
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2>营销活动</h2>
+              <p>集中管理优惠码、满减和折扣活动，客户端结算区与 AI 客服都会读取这里的活动信息。</p>
+            </div>
+          </div>
+          <div id="adminPromotionList" class="promotion-list"></div>
+        </section>
+
+        <section class="panel work-panel">
+          <div class="section-head compact">
+            <div>
+              <h2 id="promotionFormTitle">新增活动</h2>
+              <p>支持固定金额立减和百分比折扣，可设置门槛金额、到期时间和上下线状态。</p>
+            </div>
+          </div>
+          <form id="promotionForm" class="form-grid">
+            <input id="promotionCode" type="text" placeholder="优惠码，例如 COMMUTE50">
+            <input id="promotionTitle" type="text" placeholder="活动标题">
+            <select id="promotionDiscountType">
+              <option value="FIXED">固定金额立减</option>
+              <option value="PERCENT">百分比折扣</option>
+            </select>
+            <input id="promotionDiscountValue" type="number" min="0" step="0.01" placeholder="优惠力度">
+            <input id="promotionMinOrderAmount" type="number" min="0" step="0.01" placeholder="门槛金额">
+            <input id="promotionExpiresAt" type="datetime-local" placeholder="到期时间">
+            <textarea id="promotionDescription" placeholder="活动描述，例如适合通勤场景的耳机满减活动"></textarea>
+            <label class="checkbox-row">
+              <input id="promotionActive" type="checkbox" checked>
+              <span>活动当前可用</span>
+            </label>
+            <div class="form-actions">
+              <button id="savePromotionBtn" type="submit" class="primary">保存活动</button>
+              <button id="resetPromotionBtn" type="button" class="ghost">重置表单</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </section>
+
     <section id="orderManagement" class="band">
       <div class="container">
         <div class="section-head">

@@ -1,5 +1,6 @@
 package com.aishop.service;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.aishop.domain.AppUser;
 import com.aishop.domain.AssistantMessage;
 import com.aishop.domain.AssistantSession;
+import com.aishop.dto.PromotionDtos.PromotionResponse;
 import com.aishop.dto.OrderDtos.OrderResponse;
 import com.aishop.dto.ProductDtos.ProductResponse;
 import com.aishop.dto.AssistantDtos.ChatResponse;
@@ -43,6 +45,7 @@ public class AssistantService {
     private final OrderService orderService;
     private final ProductService productService;
     private final KnowledgeService knowledgeService;
+    private final PromotionService promotionService;
     private final CompiledGraph<MessagesState<String>> assistantGraph;
     private final ChatModel chatModel;
 
@@ -51,6 +54,7 @@ public class AssistantService {
                             OrderService orderService,
                             ProductService productService,
                             KnowledgeService knowledgeService,
+                            PromotionService promotionService,
                             CompiledGraph<MessagesState<String>> assistantGraph,
                             ChatModel chatModel) {
         this.sessionRepository = sessionRepository;
@@ -58,6 +62,7 @@ public class AssistantService {
         this.orderService = orderService;
         this.productService = productService;
         this.knowledgeService = knowledgeService;
+        this.promotionService = promotionService;
         this.assistantGraph = assistantGraph;
         this.chatModel = chatModel;
     }
@@ -238,6 +243,9 @@ public class AssistantService {
                                String threadId) {
         OrderResponse focusOrder = findMentionedOrder(message, recentOrders, exactOrder);
 
+        if (isPromotionIntent(message)) {
+            return buildPromotionAnswer(focusOrder, recentOrders, matchedProducts);
+        }
         if (isKnowledgePolicyIntent(message) && !hasExplicitOrderReference(message) && !sources.isEmpty()) {
             return buildKnowledgeAnswer(sources);
         }
@@ -271,19 +279,20 @@ public class AssistantService {
         if ("order".equals(intent) && isPurchaseIntent(message)) {
             var product = matchedProducts.isEmpty() ? productService.listAll().stream().findFirst().orElse(null) : matchedProducts.get(0);
             if (product != null) {
-                return "我已经为你准备了下单草稿，推荐商品是：%s，价格 %s。你确认后我就继续创建正式订单。"
-                        .formatted(product.name(), product.price());
+                return "我已经为你准备了下单草稿，推荐商品是：%s，价格 %s。%s你确认后我就继续创建正式订单。"
+                        .formatted(product.name(), product.price(), bestPromotionHint(product.price()));
             }
         }
         if ("product".equals(intent) && !matchedProducts.isEmpty()) {
             if (matchedProducts.size() == 1) {
                 var product = matchedProducts.get(0);
-                return "我先给你推荐这款商品：%s，价格 %s。%s%s"
+                return "我先给你推荐这款商品：%s，价格 %s。%s%s%s"
                         .formatted(
                                 product.name(),
                                 product.price(),
                                 product.description(),
-                                productReviewSnippet(product));
+                                productReviewSnippet(product),
+                                bestPromotionHint(product.price()));
             }
             return "我帮你筛了几款更相关的商品：" + formatProducts(matchedProducts);
         }
@@ -300,6 +309,7 @@ public class AssistantService {
                 默认收货地址：%s
                 候选商品：%s
                 最近订单：%s
+                当前活动：%s
                 相关知识：%s
                 回答要求：优先结合商品、订单、支付、售后规则和知识库，不要编造；如果用户在问订单，就先根据订单上下文回答；如果用户在问商品，就优先引用候选商品；如果用户在问地址、支付、取消、退款、确认收货等动作，要结合当前订单状态给出明确步骤；回答要简洁、明确、像客服。
                 """.formatted(
@@ -310,6 +320,7 @@ public class AssistantService {
                 user.getShippingAddress() == null ? "未填写" : user.getShippingAddress(),
                 matchedProducts.isEmpty() ? "无" : formatProducts(matchedProducts),
                 recentOrders.isEmpty() ? "无" : formatOrders(recentOrders),
+                summarizePromotionsForPrompt(focusOrder, recentOrders, matchedProducts),
                 sources.isEmpty() ? "无" : String.join(" | ", sources));
 
         try {
@@ -562,6 +573,9 @@ public class AssistantService {
         if (isHumanSupportIntent(message)) {
             return "handoff";
         }
+        if (isPromotionIntent(message)) {
+            return "promotion";
+        }
         if (text.contains("退款") || text.contains("退货") || text.contains("售后") || text.contains("保修")) {
             return "after_sales";
         }
@@ -653,6 +667,17 @@ public class AssistantService {
     private boolean isKnowledgePolicyIntent(String message) {
         String text = message == null ? "" : message.toLowerCase();
         return text.contains("规则") || text.contains("政策") || text.contains("说明") || text.contains("faq");
+    }
+
+    private boolean isPromotionIntent(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        return text.contains("优惠")
+                || text.contains("优惠券")
+                || text.contains("优惠码")
+                || text.contains("满减")
+                || text.contains("折扣")
+                || text.contains("促销")
+                || text.contains("活动");
     }
 
     private boolean isHumanSupportIntent(String message) {
@@ -1047,12 +1072,96 @@ public class AssistantService {
         return "我在知识库里查到了这些规则：" + summarizeSources(sources);
     }
 
+    private String buildPromotionAnswer(OrderResponse focusOrder,
+                                        List<OrderResponse> recentOrders,
+                                        List<ProductResponse> matchedProducts) {
+        BigDecimal referenceSubtotal = estimatePromotionSubtotal(focusOrder, recentOrders, matchedProducts);
+        List<PromotionResponse> promotions = safeListPromotions(referenceSubtotal);
+        if (promotions.isEmpty()) {
+            return "当前没有可用的优惠活动。你也可以告诉我想买什么，我可以按预算帮你挑更划算的商品。";
+        }
+        String prefix = referenceSubtotal.compareTo(BigDecimal.ZERO) > 0
+                ? "按你当前提到的金额，我帮你筛到这些活动："
+                : "当前可用的优惠活动有：";
+        return prefix + formatPromotions(promotions) + "。如果你已经选好了商品，我也可以继续帮你判断哪一个更划算。";
+    }
+
     private String summarizeSources(List<String> sources) {
         return sources.stream()
                 .limit(2)
                 .map(source -> source.length() <= 96 ? source : source.substring(0, 96) + "...")
                 .reduce((left, right) -> left + " | " + right)
                 .orElse("暂无命中");
+    }
+
+    private String summarizePromotionsForPrompt(OrderResponse focusOrder,
+                                                List<OrderResponse> recentOrders,
+                                                List<ProductResponse> matchedProducts) {
+        List<PromotionResponse> promotions = safeListPromotions(estimatePromotionSubtotal(focusOrder, recentOrders, matchedProducts));
+        return promotions.isEmpty() ? "暂无可用活动" : formatPromotions(promotions);
+    }
+
+    private BigDecimal estimatePromotionSubtotal(OrderResponse focusOrder,
+                                                 List<OrderResponse> recentOrders,
+                                                 List<ProductResponse> matchedProducts) {
+        if (focusOrder != null) {
+            return positiveMoney(focusOrder.originalAmount() != null ? focusOrder.originalAmount() : focusOrder.totalAmount());
+        }
+        if (!matchedProducts.isEmpty()) {
+            return positiveMoney(matchedProducts.get(0).price());
+        }
+        if (!recentOrders.isEmpty()) {
+            OrderResponse order = recentOrders.get(0);
+            return positiveMoney(order.originalAmount() != null ? order.originalAmount() : order.totalAmount());
+        }
+        return BigDecimal.ZERO;
+    }
+
+    private BigDecimal positiveMoney(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value.max(BigDecimal.ZERO);
+    }
+
+    private String bestPromotionHint(BigDecimal subtotal) {
+        List<PromotionResponse> promotions = safeListPromotions(positiveMoney(subtotal));
+        if (promotions.isEmpty()) {
+            return "";
+        }
+        PromotionResponse promotion = promotions.stream()
+                .filter(PromotionResponse::applicable)
+                .findFirst()
+                .orElse(promotions.get(0));
+        String title = defaultText(promotion.title(), promotion.code());
+        String hint = defaultText(promotion.applyHint(), "提交订单时校验");
+        return promotion.applicable()
+                ? "当前可用活动是 " + title + "，" + hint + "。"
+                : "当前可关注活动是 " + title + "，" + hint + "。";
+    }
+
+    private List<PromotionResponse> safeListPromotions(BigDecimal subtotal) {
+        try {
+            return promotionService.listAvailable(positiveMoney(subtotal));
+        } catch (Exception ex) {
+            log.warn("promotion lookup failed in assistant flow, subtotal={}", subtotal, ex);
+            return List.of();
+        }
+    }
+
+    private String formatPromotions(List<PromotionResponse> promotions) {
+        return promotions.stream()
+                .limit(3)
+                .map(this::formatPromotionSnippet)
+                .reduce((left, right) -> left + " | " + right)
+                .orElse("暂无可用活动");
+    }
+
+    private String formatPromotionSnippet(PromotionResponse promotion) {
+        String title = defaultText(promotion.title(), promotion.code());
+        String threshold = "满 " + promotion.minOrderAmount() + " 可用";
+        String discount = "PERCENT".equals(promotion.discountType())
+                ? "减免 " + promotion.discountValue() + "%"
+                : "立减 " + promotion.discountValue();
+        String hint = defaultText(promotion.applyHint(), "提交订单时校验");
+        return "%s(%s, %s, %s)".formatted(title, promotion.code(), discount, threshold + "，" + hint);
     }
 
     private OrderResponse firstOrderWithStatus(List<OrderResponse> orders, String... statuses) {
@@ -1100,6 +1209,15 @@ public class AssistantService {
                 .append(order.totalAmount())
                 .append(", 地址")
                 .append(order.shippingAddress() == null ? "待补充" : order.shippingAddress());
+        if (hasDiscount(order)) {
+            builder.append(", 原价").append(order.originalAmount());
+            builder.append(", 优惠").append(order.discountAmount());
+        }
+        if (order.promotionTitle() != null && !order.promotionTitle().isBlank()) {
+            builder.append(", 活动").append(order.promotionTitle());
+        } else if (order.promotionCode() != null && !order.promotionCode().isBlank()) {
+            builder.append(", 活动").append(order.promotionCode());
+        }
         if (order.shippingCarrier() != null && !order.shippingCarrier().isBlank()) {
             builder.append(", 物流").append(order.shippingCarrier());
         }
@@ -1195,10 +1313,19 @@ public class AssistantService {
                             : ", " + order.timeline().get(order.timeline().size() - 1).title();
                     String afterSales = order.afterSales() == null ? "" : ", 售后" + afterSalesStatusLabel(order.afterSales().status());
                     String payment = order.paidAt() == null ? "" : ", 已支付";
-                    return "%s[%s, %s%s%s%s]".formatted(order.orderNo(), statusLabel(order.status()), order.totalAmount(), payment, latest, afterSales);
+                    String promotion = hasDiscount(order)
+                            ? ", 优惠" + order.discountAmount() + (defaultText(order.promotionTitle(), order.promotionCode()) == null ? "" : ", 活动" + defaultText(order.promotionTitle(), order.promotionCode()))
+                            : "";
+                    return "%s[%s, %s%s%s%s%s]".formatted(order.orderNo(), statusLabel(order.status()), order.totalAmount(), promotion, payment, latest, afterSales);
                 })
                 .reduce((left, right) -> left + " | " + right)
                 .orElse("无");
+    }
+
+    private boolean hasDiscount(OrderResponse order) {
+        return order != null
+                && order.discountAmount() != null
+                && order.discountAmount().compareTo(BigDecimal.ZERO) > 0;
     }
 
     private String afterSalesStatusLabel(String status) {

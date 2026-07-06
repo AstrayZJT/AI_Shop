@@ -2,8 +2,11 @@ const adminState = {
   user: null,
   dashboard: null,
   products: [],
+  promotions: [],
+  promotionLoadError: "",
   orders: [],
   reviews: [],
+  reviewLoadError: "",
   knowledgeDocs: [],
   knowledgeMatches: [],
   knowledgeSearchKeyword: "",
@@ -14,6 +17,7 @@ const adminState = {
   assistantDrafts: [],
   selectedAssistantSessionId: null,
   editingProductId: null,
+  editingPromotionId: null,
   orderFilterStatus: "ALL",
   orderFilterKeyword: "",
   afterSalesFilter: "OPEN",
@@ -381,6 +385,58 @@ function money(value) {
     currency: "CNY",
     minimumFractionDigits: 2,
   }).format(value || 0);
+}
+
+function isPromotionExpired(promotion) {
+  return Boolean(promotion?.expiresAt) && new Date(promotion.expiresAt).getTime() < Date.now();
+}
+
+function promotionDiscountLabel(promotion) {
+  if (!promotion) {
+    return "";
+  }
+  if (promotion.discountType === "PERCENT") {
+    return `减免 ${Number(promotion.discountValue || 0)}%`;
+  }
+  return `立减 ${money(promotion.discountValue || 0)}`;
+}
+
+function promotionThresholdLabel(promotion) {
+  return `满 ${money(promotion?.minOrderAmount || 0)} 可用`;
+}
+
+function promotionStatusLabel(promotion) {
+  if (!promotion?.active) {
+    return "已停用";
+  }
+  if (isPromotionExpired(promotion)) {
+    return "已过期";
+  }
+  return "进行中";
+}
+
+function promotionStatusTagClass(promotion) {
+  if (!promotion?.active || isPromotionExpired(promotion)) {
+    return "danger";
+  }
+  return "success";
+}
+
+function toDateTimeLocalValue(value) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function toIsoDateTimeValue(value) {
+  if (!value) {
+    return null;
+  }
+  return new Date(value).toISOString();
 }
 
 function metricCard(label, value) {
@@ -1295,6 +1351,58 @@ function renderProducts() {
   });
 }
 
+function renderPromotions() {
+  const host = adminById("adminPromotionList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可维护优惠码、满减与折扣活动。</div>`;
+    return;
+  }
+  if (adminState.promotionLoadError) {
+    host.innerHTML = `<div class="empty-state">${escapeHtml(adminState.promotionLoadError)}</div>`;
+    return;
+  }
+  if (!adminState.promotions.length) {
+    host.innerHTML = `<div class="empty-state">当前还没有活动，先创建一条促销活动试试。</div>`;
+    return;
+  }
+
+  const promotions = [...adminState.promotions].sort((left, right) => {
+    if (Boolean(left.active) !== Boolean(right.active)) {
+      return left.active ? -1 : 1;
+    }
+    return new Date(right.expiresAt || 0).getTime() - new Date(left.expiresAt || 0).getTime();
+  });
+
+  host.innerHTML = promotions.map((promotion) => `
+    <article class="promotion-option admin-promotion-card ${adminState.editingPromotionId === promotion.id ? "active" : ""}">
+      <div class="row-top">
+        <div>
+          <strong>${escapeHtml(promotion.title || promotion.code)}</strong>
+          <div class="inline-meta">${escapeHtml(promotion.code)} · ${escapeHtml(promotionDiscountLabel(promotion))}</div>
+        </div>
+        <div class="tag ${promotionStatusTagClass(promotion)}">${escapeHtml(promotionStatusLabel(promotion))}</div>
+      </div>
+      ${promotion.description ? `<div class="panel-hint">${escapeHtml(promotion.description)}</div>` : `<div class="panel-hint">未填写活动描述，建议补充适用商品和使用场景。</div>`}
+      <div class="promotion-meta-row">
+        <span class="tag">${escapeHtml(promotionThresholdLabel(promotion))}</span>
+        <span class="tag">${escapeHtml(promotion.discountType === "PERCENT" ? "百分比折扣" : "固定金额立减")}</span>
+        <span class="tag">${escapeHtml(promotion.expiresAt ? `截止 ${formatDateTime(promotion.expiresAt)}` : "长期有效")}</span>
+      </div>
+      <div class="row-bottom">
+        <div class="panel-hint">${promotion.active && !isPromotionExpired(promotion) ? "客户端结算区和 AI 客服会同步读取这条活动。" : "当前不会下发到前台结算区。"}</div>
+        <button type="button" class="ghost edit-promotion-btn" data-promotion-id="${promotion.id}">编辑活动</button>
+      </div>
+    </article>
+  `).join("");
+
+  host.querySelectorAll(".edit-promotion-btn").forEach((button) => {
+    button.addEventListener("click", () => fillPromotionForm(Number(button.dataset.promotionId), true));
+  });
+}
+
 function renderAdminProductRating(product) {
   const count = Number(product.reviewCount || 0);
   if (!count) {
@@ -1388,6 +1496,7 @@ function renderOrders() {
         <div class="inline-meta">创建时间 ${formatDateTime(order.createdAt)}</div>
         <div class="inline-meta">金额 ${money(order.totalAmount)} · 地址 ${escapeHtml(order.shippingAddress || "待补充地址")}</div>
       </div>
+      ${renderAdminOrderPromotionMeta(order)}
       ${renderAdminOrderPaymentMeta(order)}
       ${renderAdminOrderShippingMeta(order)}
       ${order.afterSales ? `<div class="inline-meta">售后阶段 ${escapeHtml(afterSalesStatusLabel(order.afterSales.status))}</div>` : ""}
@@ -1429,6 +1538,10 @@ function renderReviews() {
   }
   if (!adminState.user) {
     host.innerHTML = `<div class="empty-state">登录后可查看用户评价。</div>`;
+    return;
+  }
+  if (adminState.reviewLoadError) {
+    host.innerHTML = `<div class="empty-state">${escapeHtml(adminState.reviewLoadError)}</div>`;
     return;
   }
   if (!adminState.reviews.length) {
@@ -1573,6 +1686,20 @@ function renderAdminOrderPaymentMeta(order) {
     lines.push(`<div class="inline-meta">支付时间 ${escapeHtml(formatDateTime(order.paidAt))}</div>`);
   } else if (order.status === "PENDING_PAYMENT") {
     lines.push(`<div class="inline-meta">支付状态 待用户完成支付；后台也可推进到待发货并补记收款</div>`);
+  }
+  return lines.join("");
+}
+
+function renderAdminOrderPromotionMeta(order) {
+  const lines = [];
+  if (Number(order.originalAmount || 0) > 0 && Number(order.originalAmount || 0) !== Number(order.totalAmount || 0)) {
+    lines.push(`<div class="inline-meta">原价 ${money(order.originalAmount)}</div>`);
+  }
+  if (Number(order.discountAmount || 0) > 0) {
+    lines.push(`<div class="inline-meta">优惠减免 ${money(order.discountAmount)}</div>`);
+  }
+  if (order.promotionCode || order.promotionTitle) {
+    lines.push(`<div class="inline-meta">活动 ${escapeHtml(order.promotionTitle || order.promotionCode)}${order.promotionCode ? ` · ${escapeHtml(order.promotionCode)}` : ""}</div>`);
   }
   return lines.join("");
 }
@@ -1744,6 +1871,19 @@ function resetProductForm() {
   adminById("productDescription").value = "";
 }
 
+function resetPromotionForm() {
+  adminState.editingPromotionId = null;
+  adminById("promotionFormTitle").textContent = "新增活动";
+  adminById("promotionCode").value = "";
+  adminById("promotionTitle").value = "";
+  adminById("promotionDiscountType").value = "FIXED";
+  adminById("promotionDiscountValue").value = "";
+  adminById("promotionMinOrderAmount").value = "";
+  adminById("promotionExpiresAt").value = "";
+  adminById("promotionDescription").value = "";
+  adminById("promotionActive").checked = true;
+}
+
 function fillProductForm(productId, scrollIntoView = false) {
   const product = adminState.products.find((item) => item.id === productId);
   if (!product) {
@@ -1764,6 +1904,28 @@ function fillProductForm(productId, scrollIntoView = false) {
   }
 }
 
+function fillPromotionForm(promotionId, scrollIntoView = false) {
+  const promotion = adminState.promotions.find((item) => item.id === promotionId);
+  if (!promotion) {
+    return;
+  }
+  adminState.editingPromotionId = promotion.id;
+  adminById("promotionFormTitle").textContent = `编辑活动 · ${promotion.title || promotion.code}`;
+  adminById("promotionCode").value = promotion.code || "";
+  adminById("promotionTitle").value = promotion.title || "";
+  adminById("promotionDiscountType").value = promotion.discountType || "FIXED";
+  adminById("promotionDiscountValue").value = promotion.discountValue ?? "";
+  adminById("promotionMinOrderAmount").value = promotion.minOrderAmount ?? "";
+  adminById("promotionExpiresAt").value = toDateTimeLocalValue(promotion.expiresAt);
+  adminById("promotionDescription").value = promotion.description || "";
+  adminById("promotionActive").checked = Boolean(promotion.active);
+  renderPromotions();
+
+  if (scrollIntoView) {
+    adminById("promotionForm")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
 async function loadAdminMe() {
   adminState.user = await adminFetchJson(adminAuthUrl("/api/auth/me"));
   if (!adminState.user) {
@@ -1780,8 +1942,11 @@ async function loadAdminMe() {
 function clearAdminDataState() {
   adminState.dashboard = null;
   adminState.products = [];
+  adminState.promotions = [];
+  adminState.promotionLoadError = "";
   adminState.orders = [];
   adminState.reviews = [];
+  adminState.reviewLoadError = "";
   adminState.knowledgeDocs = [];
   adminState.knowledgeMatches = [];
   adminState.knowledgeSearchKeyword = "";
@@ -1792,6 +1957,7 @@ function clearAdminDataState() {
   adminState.assistantDrafts = [];
   adminState.selectedAssistantSessionId = null;
   adminState.editingProductId = null;
+  adminState.editingPromotionId = null;
   adminState.afterSalesFilter = "OPEN";
   adminState.assistantOpsFilter = "ALL";
 }
@@ -1803,6 +1969,7 @@ async function loadAdminData() {
     renderOperationsWorkbench();
     renderAfterSalesWorkbench();
     renderProducts();
+    renderPromotions();
     renderOrderFilterTabs();
     renderOrders();
     renderReviews();
@@ -1813,11 +1980,10 @@ async function loadAdminData() {
     return;
   }
 
-  const [dashboard, products, orders, reviews, knowledgeDocs, users, assistantSessions, assistantEscalations, assistantDrafts] = await Promise.all([
+  const [dashboard, products, orders, knowledgeDocs, users, assistantSessions, assistantEscalations, assistantDrafts] = await Promise.all([
     adminFetchJson("/api/admin/dashboard"),
     adminFetchJson("/api/admin/products"),
     adminFetchJson("/api/admin/orders"),
-    adminFetchJson("/api/admin/reviews"),
     adminFetchJson("/api/admin/knowledge/documents"),
     adminFetchJson("/api/admin/users"),
     adminFetchJson("/api/admin/assistant/sessions"),
@@ -1828,12 +1994,25 @@ async function loadAdminData() {
   adminState.dashboard = dashboard;
   adminState.products = products || [];
   adminState.orders = orders || [];
-  adminState.reviews = reviews || [];
   adminState.knowledgeDocs = knowledgeDocs || [];
   adminState.users = users || [];
   adminState.assistantSessions = assistantSessions || [];
   adminState.assistantEscalations = assistantEscalations || [];
   adminState.assistantDrafts = assistantDrafts || [];
+  try {
+    adminState.promotions = await adminFetchJson("/api/admin/promotions");
+    adminState.promotionLoadError = "";
+  } catch (error) {
+    adminState.promotions = [];
+    adminState.promotionLoadError = `营销活动接口暂时不可用${error?.message ? `：${error.message}` : ""}，请在后端重启完成后重试。`;
+  }
+  try {
+    adminState.reviews = await adminFetchJson("/api/admin/reviews");
+    adminState.reviewLoadError = "";
+  } catch (error) {
+    adminState.reviews = [];
+    adminState.reviewLoadError = `评价接口暂时不可用${error?.message ? `：${error.message}` : ""}，请在后端重启完成后重试。`;
+  }
 
   const visibleSessions = filteredAssistantSessions();
   const sessionStillVisible = visibleSessions.some((session) => session.id === adminState.selectedAssistantSessionId);
@@ -1850,6 +2029,7 @@ async function loadAdminData() {
   renderOperationsWorkbench();
   renderAfterSalesWorkbench();
   renderProducts();
+  renderPromotions();
   renderOrderFilterTabs();
   renderOrders();
   renderReviews();
@@ -1929,6 +2109,31 @@ async function saveProduct(event) {
   resetProductForm();
   await loadAdminData();
   setAdminStatus("商品信息已保存");
+}
+
+async function savePromotion(event) {
+  event.preventDefault();
+  const payload = {
+    code: adminById("promotionCode").value.trim(),
+    title: adminById("promotionTitle").value.trim(),
+    description: adminById("promotionDescription").value.trim(),
+    discountType: adminById("promotionDiscountType").value,
+    discountValue: Number(adminById("promotionDiscountValue").value),
+    minOrderAmount: Number(adminById("promotionMinOrderAmount").value || 0),
+    active: adminById("promotionActive").checked,
+    expiresAt: toIsoDateTimeValue(adminById("promotionExpiresAt").value),
+  };
+  const url = adminState.editingPromotionId
+    ? `/api/admin/promotions/${adminState.editingPromotionId}`
+    : "/api/admin/promotions";
+  const method = adminState.editingPromotionId ? "PUT" : "POST";
+  await adminFetchJson(url, {
+    method,
+    body: JSON.stringify(payload),
+  });
+  resetPromotionForm();
+  await loadAdminData();
+  setAdminStatus("营销活动已保存");
 }
 
 function readAdminOrderNote(orderId) {
@@ -2217,6 +2422,11 @@ document.addEventListener("DOMContentLoaded", () => {
   adminById("adminAssistantResolveBtn").addEventListener("click", () => runAdminAction(() => replyAssistantSession(true)));
   adminById("productForm").addEventListener("submit", (event) => runAdminAction(() => saveProduct(event)));
   adminById("resetProductBtn").addEventListener("click", resetProductForm);
+  adminById("promotionForm").addEventListener("submit", (event) => runAdminAction(() => savePromotion(event)));
+  adminById("resetPromotionBtn").addEventListener("click", () => {
+    resetPromotionForm();
+    renderPromotions();
+  });
   adminById("adminOrderSearchBtn").addEventListener("click", () => runAdminAction(async () => applyOrderSearch()));
   adminById("clearOrderFiltersBtn").addEventListener("click", clearOrderFilters);
   adminById("adminOrderSearchInput").addEventListener("keydown", (event) => {

@@ -29,7 +29,7 @@ public class PromotionService {
     @Transactional(readOnly = true)
     public List<PromotionResponse> listAvailable(BigDecimal subtotalAmount) {
         BigDecimal subtotal = safeMoney(subtotalAmount);
-        return promotionCampaignRepository.findAllByOrderByCreatedAtDesc().stream()
+        return promotionCampaignRepository.findAllByOrderByIdDesc().stream()
                 .filter(this::isVisibleToClient)
                 .map(promotion -> toResponse(promotion, subtotal))
                 .toList();
@@ -37,7 +37,7 @@ public class PromotionService {
 
     @Transactional(readOnly = true)
     public List<PromotionResponse> listAll() {
-        return promotionCampaignRepository.findAllByOrderByCreatedAtDesc().stream()
+        return promotionCampaignRepository.findAllByOrderByIdDesc().stream()
                 .map(promotion -> toResponse(promotion, BigDecimal.ZERO))
                 .toList();
     }
