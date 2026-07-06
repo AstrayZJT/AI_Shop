@@ -61,13 +61,25 @@ function clientAuthUrl(url) {
   return `${url}${url.includes("?") ? "&" : "?"}scope=${CLIENT_AUTH_SCOPE}`;
 }
 
+function clientApiUrl(url) {
+  const baseUrl = String(window.AI_SHOP_API_BASE_URL || "").replace(/\/$/, "");
+  if (!baseUrl || !url.startsWith("/")) {
+    return url;
+  }
+  return `${baseUrl}${url}`;
+}
+
+function clientCredentialsMode() {
+  return window.AI_SHOP_API_BASE_URL ? "include" : "same-origin";
+}
+
 async function clientFetchJson(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await fetch(clientApiUrl(url), {
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     },
-    credentials: "same-origin",
+    credentials: clientCredentialsMode(),
     ...options,
   });
   const text = await response.text();

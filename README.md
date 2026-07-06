@@ -16,9 +16,11 @@
   - 客户端：`/client/index.html`
   - 管理端：`/admin/index.html`
 - 后端统一提供 REST API
-- 静态前端资源仍然由同一个 Spring Boot 服务托管，方便本地联调
+- 当前保留两种前端运行方式
+  - 集成模式：静态前端资源仍然由同一个 Spring Boot 服务托管，方便本地联调
+  - 分离模式：新增 `frontend/` 独立前端工程，可单独用 Vite 启动客户端和管理端
 
-也就是说，它不是“前后端两个仓库”的拆分方式，但已经是“前端页面与后端接口解耦”的结构。
+也就是说，它不是“前后端两个仓库”的拆分方式，但已经是“前端页面与后端接口解耦”，并支持独立前端开发服务器的结构。
 
 ## 2. 技术栈
 
@@ -32,6 +34,7 @@
 - LangChain4j
 - LangGraph4j
 - 原生 HTML / CSS / JavaScript
+- Vite（独立前端开发服务器）
 
 ## 3. 先看最重要的：AI 到底怎么接的
 
@@ -188,6 +191,8 @@ $env:AGENT_WEBPAGE_MAX_CHARACTERS="8000"
 
 ### 5.2 PowerShell 启动示例
 
+### 集成模式（后端同时托管前端）
+
 ### 真实 AI 模型模式
 
 ```powershell
@@ -211,6 +216,40 @@ $env:DB_USERNAME="postgres"
 $env:DB_PASSWORD=""
 $env:SHOP_AI_ENABLED="false"
 mvn spring-boot:run
+```
+
+### 分离模式（Spring Boot API + 独立前端）
+
+先启动后端：
+
+```powershell
+$env:DB_HOST="localhost"
+$env:DB_PORT="5432"
+$env:DB_NAME="agentdemo"
+$env:DB_USERNAME="postgres"
+$env:DB_PASSWORD=""
+$env:SHOP_AI_ENABLED="false"
+mvn spring-boot:run
+```
+
+再启动前端：
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+默认情况下：
+
+- 前端开发端口：`5173`
+- 后端 API：`http://localhost:8080`
+- Vite 会把 `/api/*` 自动代理到 Spring Boot
+
+如果你后端不是 `8080`，可以先在 `frontend/.env` 里配置：
+
+```powershell
+VITE_BACKEND_TARGET=http://localhost:8082
 ```
 
 ### 指定端口启动
@@ -255,10 +294,17 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 默认端口是 `8080`。
 
+集成模式：
+
 - 客户端首页：`http://localhost:8080/`
 - 客户端直达：`http://localhost:8080/client/index.html`
 - 助手入口：`http://localhost:8080/assistant.html`
 - 管理端：`http://localhost:8080/admin/index.html`
+
+分离模式（默认 Vite 端口）：
+
+- 客户端：`http://localhost:5173/client/index.html`
+- 管理端：`http://localhost:5173/admin/index.html`
 
 如果你改成了 `8082`，把端口替换成 `8082` 即可。
 
@@ -544,6 +590,13 @@ AI 会话新增了 `service_status` 字段，用于区分：
 - 直接同浏览器双开客户端和管理端
 - 或者一个普通窗口、一个无痕窗口做多账号测试
 
+如果你使用独立前端工程：
+
+- 开发时访问 `http://localhost:5173/client/index.html`
+- 或者访问 `http://localhost:5173/admin/index.html`
+- `/api/*` 会由 Vite 代理到 Spring Boot
+- 后端默认允许 `5173` / `4173` 端口跨域携带 cookie
+
 ### 12.2 客户端商品推荐怎么理解
 
 客户端商品目录里的“为你推荐 / 通勤轻便 / 专注办公 / 手机拍照 / 影音娱乐”是前端本地选品体验，不是每次都调用大模型。
@@ -590,6 +643,7 @@ mvn -q -DskipTests compile
 - AI 模型接入：`src/main/java/com/aishop/config/AiModelConfig.java`
 - 本地 AI 兜底：`src/main/java/com/aishop/config/LocalChatModelConfig.java`
 - 本地 embedding：`src/main/java/com/aishop/config/LocalEmbeddingConfig.java`
+- 前端跨域与分离开发支持：`src/main/java/com/aishop/config/FrontendCorsConfig.java`
 - AI 客服主逻辑：`src/main/java/com/aishop/service/AssistantService.java`
 - 管理端客服接管：`src/main/java/com/aishop/service/AdminService.java`
 - RAG 导入与检索：`src/main/java/com/aishop/service/KnowledgeService.java`
@@ -599,6 +653,7 @@ mvn -q -DskipTests compile
 - 客户端前端逻辑：`src/main/resources/static/scripts/client-app.js`
 - 管理端前端逻辑：`src/main/resources/static/scripts/admin-app.js`
 - 前后台共享样式：`src/main/resources/static/styles/portal.css`
+- 独立前端工程：`frontend/`
 
 ---
 

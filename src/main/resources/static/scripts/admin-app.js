@@ -84,13 +84,25 @@ function adminAuthUrl(url) {
   return `${url}${url.includes("?") ? "&" : "?"}scope=${ADMIN_AUTH_SCOPE}`;
 }
 
+function adminApiUrl(url) {
+  const baseUrl = String(window.AI_SHOP_API_BASE_URL || "").replace(/\/$/, "");
+  if (!baseUrl || !url.startsWith("/")) {
+    return url;
+  }
+  return `${baseUrl}${url}`;
+}
+
+function adminCredentialsMode() {
+  return window.AI_SHOP_API_BASE_URL ? "include" : "same-origin";
+}
+
 async function adminFetchJson(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await fetch(adminApiUrl(url), {
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     },
-    credentials: "same-origin",
+    credentials: adminCredentialsMode(),
     ...options,
   });
   const text = await response.text();
