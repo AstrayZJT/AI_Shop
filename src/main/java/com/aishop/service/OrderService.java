@@ -35,29 +35,35 @@ public class OrderService {
     private final OrderItemRepository orderItemRepository;
     private final PendingOrderDraftRepository draftRepository;
     private final ProductService productService;
+    private final OrderTimelineService orderTimelineService;
+    private final AfterSalesService afterSalesService;
 
     public OrderService(ShopOrderRepository orderRepository,
                         OrderItemRepository orderItemRepository,
                         PendingOrderDraftRepository draftRepository,
-                        ProductService productService) {
+                        ProductService productService,
+                        OrderTimelineService orderTimelineService,
+                        AfterSalesService afterSalesService) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.draftRepository = draftRepository;
         this.productService = productService;
+        this.orderTimelineService = orderTimelineService;
+        this.afterSalesService = afterSalesService;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<OrderResponse> listOrders(AppUser user) {
         return orderRepository.findByUserOrderByCreatedAtDesc(user).stream().map(this::toResponse).toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public OrderResponse detail(AppUser user, Long id) {
         var order = requireOwnedOrder(user, id);
         return toResponse(order);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public OrderResponse findByOrderNo(AppUser user, String orderNo) {
         if (orderNo == null || orderNo.isBlank()) {
             return null;
@@ -133,6 +139,11 @@ public class OrderService {
 
         draft.setStatus("CONFIRMED");
         draftRepository.save(draft);
+        orderTimelineService.recordCustomerEvent(
+                order,
+                "ORDER_CREATED",
+                "用户确认 AI 下单草稿",
+                "已确认 %s x %s，并生成正式订单。".formatted(payload.productName(), payload.quantity()));
         return toResponse(order);
     }
 
@@ -156,7 +167,7 @@ public class OrderService {
         return orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<OrderResponse> listAllOrders() {
         return orderRepository.findAllByOrderByCreatedAtDesc().stream().map(this::toResponse).toList();
     }
@@ -164,6 +175,7 @@ public class OrderService {
     @Transactional
     public OrderResponse updateStatus(Long id, String rawStatus) {
         ShopOrder order = getOrderEntity(id);
+        OrderStatus previousStatus = order.getStatus();
         try {
             order.setStatus(OrderStatus.valueOf(rawStatus));
         } catch (Exception ex) {
@@ -173,11 +185,22 @@ public class OrderService {
             order.setShippedAt(Instant.now());
         }
         orderRepository.save(order);
+        orderTimelineService.recordSystemEvent(
+                order,
+                "ORDER_STATUS_CHANGED",
+                "订单状态已更新为" + statusLabel(order.getStatus()),
+                "系统将订单状态从 %s 调整为 %s。".formatted(statusLabel(previousStatus), statusLabel(order.getStatus())),
+                Instant.now());
         return toResponse(order);
     }
 
     @Transactional
     public OrderResponse updateShippingAddress(AppUser user, Long id, String shippingAddress, String note) {
+        return updateShippingAddress(user, id, shippingAddress, note, "用户");
+    }
+
+    @Transactional
+    public OrderResponse updateShippingAddress(AppUser user, Long id, String shippingAddress, String note, String actorLabel) {
         ShopOrder order = requireOwnedOrder(user, id);
         if (!canUpdateShippingAddress(order)) {
             throw new IllegalArgumentException("当前订单状态暂不支持修改收货地址");
@@ -189,11 +212,24 @@ public class OrderService {
         order.setShippingAddress(normalizedAddress);
         order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户修改收货地址", note));
         orderRepository.save(order);
+        recordTimelineByActor(
+                order,
+                actorLabel,
+                "ORDER_ADDRESS_UPDATED",
+                "更新收货地址",
+                "收货地址已改为 %s。%s".formatted(
+                        normalizedAddress,
+                        composeOptionalSuffix(note)));
         return toResponse(order);
     }
 
     @Transactional
     public OrderResponse cancelOrder(AppUser user, Long id, String note) {
+        return cancelOrder(user, id, note, "用户");
+    }
+
+    @Transactional
+    public OrderResponse cancelOrder(AppUser user, Long id, String note, String actorLabel) {
         ShopOrder order = requireOwnedOrder(user, id);
         if (!(order.getStatus() == OrderStatus.CONFIRMED || order.getStatus() == OrderStatus.PROCESSING)) {
             throw new IllegalArgumentException("当前订单状态不支持取消");
@@ -202,11 +238,22 @@ public class OrderService {
         order.setStatus(OrderStatus.CANCELLED);
         order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户取消订单", note));
         orderRepository.save(order);
+        recordTimelineByActor(
+                order,
+                actorLabel,
+                "ORDER_CANCELLED",
+                "订单已取消",
+                "订单已取消并回补库存。%s".formatted(composeOptionalSuffix(note)));
         return toResponse(order);
     }
 
     @Transactional
     public OrderResponse confirmReceipt(AppUser user, Long id) {
+        return confirmReceipt(user, id, "用户");
+    }
+
+    @Transactional
+    public OrderResponse confirmReceipt(AppUser user, Long id, String actorLabel) {
         ShopOrder order = requireOwnedOrder(user, id);
         if (order.getStatus() != OrderStatus.SHIPPED) {
             throw new IllegalArgumentException("只有已发货订单才能确认收货");
@@ -214,11 +261,22 @@ public class OrderService {
         order.setStatus(OrderStatus.COMPLETED);
         order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户确认收货", null));
         orderRepository.save(order);
+        recordTimelineByActor(
+                order,
+                actorLabel,
+                "ORDER_COMPLETED",
+                "订单已完成",
+                "订单已确认收货，履约流程完成。");
         return toResponse(order);
     }
 
     @Transactional
     public OrderResponse requestRefund(AppUser user, Long id, String note) {
+        return requestRefund(user, id, note, "用户");
+    }
+
+    @Transactional
+    public OrderResponse requestRefund(AppUser user, Long id, String note, String actorLabel) {
         ShopOrder order = requireOwnedOrder(user, id);
         if (!(order.getStatus() == OrderStatus.SHIPPED || order.getStatus() == OrderStatus.COMPLETED)) {
             throw new IllegalArgumentException("当前订单状态不支持申请退款");
@@ -226,6 +284,31 @@ public class OrderService {
         order.setStatus(OrderStatus.REFUND_REQUESTED);
         order.setRiskNote(appendRiskNote(order.getRiskNote(), "用户发起退款申请", note));
         orderRepository.save(order);
+        afterSalesService.submitRefundRequest(order, note);
+        recordTimelineByActor(
+                order,
+                actorLabel,
+                "REFUND_REQUESTED",
+                "退款申请已提交",
+                "订单已进入退款审核流程。%s".formatted(composeOptionalSuffix(note)));
+        return toResponse(order);
+    }
+
+    @Transactional
+    public OrderResponse submitReturnShipment(AppUser user, Long id, String carrier, String trackingNo, String note) {
+        ShopOrder order = requireOwnedOrder(user, id);
+        if (order.getStatus() != OrderStatus.REFUND_REQUESTED) {
+            throw new IllegalArgumentException("当前订单不在售后回寄阶段");
+        }
+        afterSalesService.submitReturnShipment(order, carrier, trackingNo, note);
+        orderTimelineService.recordCustomerEvent(
+                order,
+                "RETURN_SHIPPED",
+                "用户已回寄商品",
+                "回寄物流 %s，运单号 %s。%s".formatted(
+                        carrier == null ? "" : carrier.trim(),
+                        trackingNo == null ? "" : trackingNo.trim(),
+                        composeOptionalSuffix(note)));
         return toResponse(order);
     }
 
@@ -257,7 +340,9 @@ public class OrderService {
                 order.getTrackingNo(),
                 order.getShippedAt(),
                 order.getRiskNote(),
-                items);
+                items,
+                orderTimelineService.listOrderTimeline(order),
+                afterSalesService.toResponse(order));
     }
 
     private ShopOrder requireOwnedOrder(AppUser user, Long id) {
@@ -274,6 +359,39 @@ public class OrderService {
             return suffix;
         }
         return current + " | " + suffix;
+    }
+
+    private void recordTimelineByActor(ShopOrder order,
+                                       String actorLabel,
+                                       String eventType,
+                                       String title,
+                                       String detail) {
+        if ("AI 客服".equals(actorLabel)) {
+            orderTimelineService.recordAssistantEvent(order, eventType, title, detail);
+            return;
+        }
+        orderTimelineService.recordCustomerEvent(order, eventType, title, detail);
+    }
+
+    private String composeOptionalSuffix(String note) {
+        if (note == null || note.isBlank()) {
+            return "未补充额外说明。";
+        }
+        return "备注：" + note.trim();
+    }
+
+    private String statusLabel(OrderStatus status) {
+        return switch (status) {
+            case DRAFT -> "草稿";
+            case PENDING_CONFIRMATION -> "待确认";
+            case CONFIRMED -> "待发货";
+            case PROCESSING -> "处理中";
+            case SHIPPED -> "已发货";
+            case COMPLETED -> "已完成";
+            case REFUND_REQUESTED -> "退款处理中";
+            case REFUNDED -> "已退款";
+            case CANCELLED -> "已取消";
+        };
     }
 
     void restoreStockForOrder(ShopOrder order) {

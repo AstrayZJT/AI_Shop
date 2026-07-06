@@ -24,6 +24,14 @@ const ORDER_STATUS_LABELS = {
   CANCELLED: "已取消",
 };
 
+const AFTER_SALES_STATUS_LABELS = {
+  REQUESTED: "等待平台审核",
+  AWAITING_CUSTOMER_RETURN: "等待用户回寄",
+  RETURN_SHIPPED: "已提交回寄物流",
+  REFUNDED: "售后已完成",
+  REJECTED: "售后已驳回",
+};
+
 const ASSISTANT_SERVICE_STATUS_LABELS = {
   ACTIVE: "AI 在线服务中",
   ESCALATED: "人工跟进中",
@@ -75,6 +83,10 @@ function escapeHtml(value) {
 
 function statusLabel(status) {
   return ORDER_STATUS_LABELS[status] || status;
+}
+
+function afterSalesStatusLabel(status) {
+  return AFTER_SALES_STATUS_LABELS[status] || "售后处理中";
 }
 
 function draftStatusLabel(status) {
@@ -314,6 +326,7 @@ function renderOrders() {
           <div>${escapeHtml(item.productName)} x ${item.quantity} · ${currency(item.lineTotal)}</div>
         `).join("")}
       </div>
+      ${renderOrderTimeline(order)}
       ${renderOrderActionArea(order)}
     </article>
   `).join("");
@@ -322,6 +335,9 @@ function renderOrders() {
   });
   host.querySelectorAll(".order-ai-btn").forEach((button) => {
     button.addEventListener("click", () => runClientAction(() => sendAssistantMessage(`请结合订单 ${button.dataset.orderNo} 的当前状态，告诉我下一步可以做什么`)));
+  });
+  host.querySelectorAll(".after-sales-return-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => submitReturnShipment(Number(button.dataset.orderId))));
   });
 }
 
@@ -350,8 +366,9 @@ function renderOrderActionArea(order) {
       <div class="order-actions">
         ${buttons.join("")}
       </div>
-      <div class="panel-hint">${escapeHtml(orderActionHint(order.status))}</div>
+      <div class="panel-hint">${escapeHtml(orderActionHint(order))}</div>
     </div>
+    ${renderAfterSalesPanel(order)}
   `;
 }
 
@@ -365,7 +382,8 @@ function orderActionPlaceholder(status) {
   return "可填写售后说明";
 }
 
-function orderActionHint(status) {
+function orderActionHint(order) {
+  const status = typeof order === "string" ? order : order.status;
   if (canCancelOrder(status)) {
     return "待发货和处理中订单可以直接在线取消，也支持先改当前订单地址。";
   }
@@ -376,6 +394,12 @@ function orderActionHint(status) {
     return "已发货或已完成订单支持发起退款申请。";
   }
   if (status === "REFUND_REQUESTED") {
+    if (order?.afterSales?.status === "AWAITING_CUSTOMER_RETURN") {
+      return "平台已经给出退货指引，寄回商品后记得提交回寄单号。";
+    }
+    if (order?.afterSales?.status === "RETURN_SHIPPED") {
+      return "你已经提交回寄物流，等待平台确认收货退款。";
+    }
     return "退款申请已经提交，等待平台处理。";
   }
   if (status === "REFUNDED") {
@@ -411,7 +435,104 @@ function renderOrderShippingMeta(order) {
   if (order.shippedAt) {
     lines.push(`<div class="inline-meta">发货时间 ${escapeHtml(new Date(order.shippedAt).toLocaleString("zh-CN"))}</div>`);
   }
+  const latest = latestLogisticsEvent(order);
+  if (latest?.detail) {
+    lines.push(`<div class="inline-meta">最新物流 ${escapeHtml(latest.detail)}</div>`);
+  }
   return lines.join("");
+}
+
+function latestLogisticsEvent(order) {
+  const timeline = order.timeline || [];
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const event = timeline[index];
+    if (event?.eventType === "LOGISTICS_UPDATED" || event?.eventType === "ORDER_SHIPPED") {
+      return event;
+    }
+  }
+  return null;
+}
+
+function renderAfterSalesPanel(order) {
+  const afterSales = order.afterSales;
+  if (!afterSales && !["REFUND_REQUESTED", "REFUNDED"].includes(order.status)) {
+    return "";
+  }
+  const status = afterSalesStatusLabel(afterSales?.status);
+  let hint = "当前售后工单会随着平台审核、退货回寄和退款完成持续更新。";
+  if (afterSales?.status === "REQUESTED") {
+    hint = "退款申请已经提交，正在等待平台审核。";
+  } else if (afterSales?.status === "AWAITING_CUSTOMER_RETURN") {
+    hint = "平台已经同意退货退款，请按回寄地址寄回商品并提交回寄单号。";
+  } else if (afterSales?.status === "RETURN_SHIPPED") {
+    hint = "你已经提交回寄物流，平台确认收到退货后会继续处理退款。";
+  } else if (afterSales?.status === "REFUNDED" || order.status === "REFUNDED") {
+    hint = "退款已经处理完成，可以在时间线里回看整个售后过程。";
+  } else if (afterSales?.status === "REJECTED") {
+    hint = "平台已经驳回这笔售后申请，可以查看管理员说明。";
+  }
+  return `
+    <div class="after-sales-panel">
+      <div class="row-top">
+        <strong>售后工单</strong>
+        <div class="tag warning">${escapeHtml(status)}</div>
+      </div>
+      <div class="after-sales-grid">
+        ${afterSales?.customerReason ? `<div class="inline-meta">退款原因 ${escapeHtml(afterSales.customerReason)}</div>` : ""}
+        ${afterSales?.adminReply ? `<div class="inline-meta">管理员说明 ${escapeHtml(afterSales.adminReply)}</div>` : ""}
+        ${afterSales?.returnAddress ? `<div class="inline-meta">回寄地址 ${escapeHtml(afterSales.returnAddress)}</div>` : ""}
+        ${afterSales?.returnCarrier ? `<div class="inline-meta">回寄物流 ${escapeHtml(afterSales.returnCarrier)}</div>` : ""}
+        ${afterSales?.returnTrackingNo ? `<div class="inline-meta">回寄单号 ${escapeHtml(afterSales.returnTrackingNo)}</div>` : ""}
+        ${afterSales?.returnNote ? `<div class="inline-meta">回寄备注 ${escapeHtml(afterSales.returnNote)}</div>` : ""}
+        ${afterSales?.requestedAt ? `<div class="inline-meta">申请时间 ${escapeHtml(formatMessageTime(afterSales.requestedAt))}</div>` : ""}
+        ${afterSales?.adminRespondedAt ? `<div class="inline-meta">审核时间 ${escapeHtml(formatMessageTime(afterSales.adminRespondedAt))}</div>` : ""}
+        ${afterSales?.customerShippedAt ? `<div class="inline-meta">回寄时间 ${escapeHtml(formatMessageTime(afterSales.customerShippedAt))}</div>` : ""}
+        ${afterSales?.resolvedAt ? `<div class="inline-meta">完成时间 ${escapeHtml(formatMessageTime(afterSales.resolvedAt))}</div>` : ""}
+      </div>
+      ${renderAfterSalesReturnForm(order, afterSales)}
+      <div class="panel-hint">${escapeHtml(hint)}</div>
+    </div>
+  `;
+}
+
+function renderAfterSalesReturnForm(order, afterSales) {
+  if (afterSales?.status !== "AWAITING_CUSTOMER_RETURN") {
+    return "";
+  }
+  return `
+    <div class="after-sales-return-form">
+      <input class="return-carrier-input" data-order-id="${order.id}" placeholder="回寄物流公司，例如顺丰">
+      <input class="return-tracking-input" data-order-id="${order.id}" placeholder="回寄运单号">
+      <textarea class="return-note-input" data-order-id="${order.id}" placeholder="回寄说明，例如包装完好、已附带发票"></textarea>
+      <div class="order-actions">
+        <button type="button" class="secondary after-sales-return-btn" data-order-id="${order.id}">提交回寄单号</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderOrderTimeline(order) {
+  const timeline = order.timeline || [];
+  if (!timeline.length) {
+    return `<div class="timeline-empty">当前订单还没有可展示的履约轨迹。</div>`;
+  }
+  return `
+    <div class="timeline-list">
+      ${timeline.map((event) => `
+        <div class="timeline-item">
+          <div class="timeline-marker"></div>
+          <div class="timeline-content">
+            <div class="row-top">
+              <strong class="timeline-title">${escapeHtml(event.title || "订单进度更新")}</strong>
+              <div class="inline-meta">${escapeHtml(formatMessageTime(event.occurredAt))}</div>
+            </div>
+            <div class="inline-meta">处理方 ${escapeHtml(event.actorLabel || "系统")}</div>
+            ${event.detail ? `<div class="timeline-detail">${escapeHtml(event.detail)}</div>` : ""}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderSessions() {
@@ -866,6 +987,18 @@ function readOrderAddress(orderId) {
   return document.querySelector(`.order-address-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
+function readReturnCarrier(orderId) {
+  return document.querySelector(`.return-carrier-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readReturnTrackingNo(orderId) {
+  return document.querySelector(`.return-tracking-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readReturnNote(orderId) {
+  return document.querySelector(`.return-note-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
 async function performOrderAction(orderId, action) {
   let url = "";
   let options = { method: "PATCH" };
@@ -889,6 +1022,24 @@ async function performOrderAction(orderId, action) {
   } else {
     setStoreStatus(`订单 ${updatedOrder.orderNo} 已更新为 ${statusLabel(updatedOrder.status)}`);
   }
+  await loadOrders();
+}
+
+async function submitReturnShipment(orderId) {
+  const carrier = readReturnCarrier(orderId);
+  const trackingNo = readReturnTrackingNo(orderId);
+  if (!carrier || !trackingNo) {
+    throw new Error("请先填写回寄物流公司和运单号");
+  }
+  const updatedOrder = await clientFetchJson(`/api/orders/${orderId}/return-shipment`, {
+    method: "POST",
+    body: JSON.stringify({
+      carrier,
+      trackingNo,
+      note: readReturnNote(orderId),
+    }),
+  });
+  setStoreStatus(`订单 ${updatedOrder.orderNo} 的回寄物流已提交，等待平台确认收货退款`);
   await loadOrders();
 }
 

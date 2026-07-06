@@ -268,6 +268,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - 客户端账号：`demo / demo123`
 - 管理端账号：`admin / admin123`
+- 客服账号：`support1 / support123`
 
 对应初始化代码：
 
@@ -283,10 +284,13 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 购物车增删改
 - 结算下单
 - 订单列表
+- 订单履约时间线
+- 物流节点追踪
 - 发货前修改收货地址
 - 用户侧取消订单
 - 用户侧确认收货
 - 用户侧申请退款
+- 用户侧提交回寄物流
 - AI 客服对话
 
 ### 8.2 管理端
@@ -294,8 +298,12 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 仪表盘数据总览
 - 商品新增 / 编辑
 - 订单状态推进
+- 订单履约时间线
+- 追加物流节点并同步到客户端
 - 发货时填写物流公司和运单号
 - 退款审核
+- 发送退货指引
+- 确认收到退货并退款
 - 用户列表
 - 知识库文档导入与检索
 - AI 会话列表
@@ -303,7 +311,8 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - AI 会话认领
 - AI 会话待处理 / 客户未读计数
 - AI 会话首响时间、认领时间、结案时间
-- AI 客服工作台筛选视图（我的待处理、待认领、待回复、客户未读、已结案）
+- AI 客服工作台筛选视图（我的待处理、待认领、待回复、首响超时、客户未读、已结案）
+- 人工客服认领、分派、转交会话
 - 人工客服回复并结案
 
 ### 8.3 AI 客服
@@ -312,7 +321,9 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - 商品推荐
 - 查询最近订单
-- 查询具体订单状态、物流、地址
+- 查询具体订单状态、物流、地址、最新履约进度
+- 读取最新物流节点并结合订单状态解释下一步
+- 查询退款 / 售后进度与回寄物流状态
 - 生成下单草稿
 - 确认草稿生成正式订单
 - 取消草稿

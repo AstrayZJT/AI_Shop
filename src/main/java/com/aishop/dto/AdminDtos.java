@@ -5,6 +5,8 @@ import java.time.Instant;
 import java.util.List;
 
 import com.aishop.dto.KnowledgeDtos.SearchResponse;
+import com.aishop.dto.OrderDtos.AfterSalesResponse;
+import com.aishop.dto.OrderDtos.OrderTimelineResponse;
 
 public final class AdminDtos {
     private AdminDtos() {
@@ -45,9 +47,15 @@ public final class AdminDtos {
                                      Instant shippedAt,
                                      String riskNote,
                                      Instant createdAt,
-                                     List<AdminOrderItemResponse> items) {}
+                                     List<AdminOrderItemResponse> items,
+                                     List<OrderTimelineResponse> timeline,
+                                     AfterSalesResponse afterSales) {}
 
     public record UpdateOrderStatusRequest(String status, String note, String shippingCarrier, String trackingNo) {}
+
+    public record OrderLogisticsUpdateRequest(String detail) {}
+
+    public record ReturnInstructionRequest(String returnAddress, String reply) {}
 
     public record RefundReviewRequest(Boolean approved, String note) {}
 

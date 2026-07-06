@@ -57,6 +57,8 @@ public class AdminService {
     private final KnowledgeDocumentRepository knowledgeDocumentRepository;
     private final ProductService productService;
     private final KnowledgeService knowledgeService;
+    private final OrderTimelineService orderTimelineService;
+    private final AfterSalesService afterSalesService;
 
     public AdminService(AppUserRepository userRepository,
                         AssistantSessionRepository assistantSessionRepository,
@@ -67,7 +69,9 @@ public class AdminService {
                         PendingOrderDraftRepository pendingOrderDraftRepository,
                         KnowledgeDocumentRepository knowledgeDocumentRepository,
                         ProductService productService,
-                        KnowledgeService knowledgeService) {
+                        KnowledgeService knowledgeService,
+                        OrderTimelineService orderTimelineService,
+                        AfterSalesService afterSalesService) {
         this.userRepository = userRepository;
         this.assistantSessionRepository = assistantSessionRepository;
         this.assistantMessageRepository = assistantMessageRepository;
@@ -78,6 +82,8 @@ public class AdminService {
         this.knowledgeDocumentRepository = knowledgeDocumentRepository;
         this.productService = productService;
         this.knowledgeService = knowledgeService;
+        this.orderTimelineService = orderTimelineService;
+        this.afterSalesService = afterSalesService;
     }
 
     @Transactional(readOnly = true)
@@ -122,14 +128,20 @@ public class AdminService {
         return productService.toResponse(productRepository.save(product));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<AdminOrderResponse> listOrders() {
         return orderRepository.findAllByOrderByCreatedAtDesc().stream().map(this::toAdminOrderResponse).toList();
     }
 
     @Transactional
-    public AdminOrderResponse updateOrderStatus(Long id, String rawStatus, String note, String shippingCarrier, String trackingNo) {
+    public AdminOrderResponse updateOrderStatus(Long id,
+                                                AppUser actingAdmin,
+                                                String rawStatus,
+                                                String note,
+                                                String shippingCarrier,
+                                                String trackingNo) {
         ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        OrderStatus previousStatus = order.getStatus();
         OrderStatus nextStatus = parseStatus(rawStatus);
         if (nextStatus == OrderStatus.REFUNDED || order.getStatus() == OrderStatus.REFUND_REQUESTED) {
             throw new IllegalArgumentException("退款申请请使用售后审核动作处理");
@@ -144,11 +156,17 @@ public class AdminService {
         order.setStatus(nextStatus);
         order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员更新状态为" + nextStatus.name(), note));
         orderRepository.save(order);
+        orderTimelineService.recordAdminEvent(
+                order,
+                "ORDER_STATUS_CHANGED",
+                adminStatusTitle(nextStatus),
+                adminStatusDetail(previousStatus, nextStatus, shippingCarrier, trackingNo, note),
+                actingAdmin == null ? null : actingAdmin.getDisplayName());
         return toAdminOrderResponse(order);
     }
 
     @Transactional
-    public AdminOrderResponse reviewRefund(Long id, Boolean approved, String note) {
+    public AdminOrderResponse reviewRefund(Long id, AppUser actingAdmin, Boolean approved, String note) {
         ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
         if (order.getStatus() != OrderStatus.REFUND_REQUESTED) {
             throw new IllegalArgumentException("当前订单不在退款审核状态");
@@ -158,11 +176,87 @@ public class AdminService {
             restoreStockForOrder(order);
             order.setStatus(OrderStatus.REFUNDED);
             order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员同意退款", note));
+            afterSalesService.markRefunded(order, note);
         } else {
             order.setStatus(OrderStatus.COMPLETED);
             order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员驳回退款", note));
+            afterSalesService.markRejected(order, note);
         }
         orderRepository.save(order);
+        orderTimelineService.recordAdminEvent(
+                order,
+                safeApproved ? "REFUND_COMPLETED" : "REFUND_REJECTED",
+                safeApproved ? "退款审核通过" : "退款申请驳回",
+                safeApproved
+                        ? "平台已同意退款并回补库存。%s".formatted(composeOptionalSuffix(note))
+                        : "平台已驳回退款申请，订单回到已完成状态。%s".formatted(composeOptionalSuffix(note)),
+                actingAdmin == null ? null : actingAdmin.getDisplayName());
+        return toAdminOrderResponse(order);
+    }
+
+    @Transactional
+    public AdminOrderResponse provideReturnInstructions(Long id, AppUser actingAdmin, String returnAddress, String reply) {
+        ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        if (order.getStatus() != OrderStatus.REFUND_REQUESTED) {
+            throw new IllegalArgumentException("当前订单不在售后审核阶段");
+        }
+        var afterSalesCase = afterSalesService.getCase(order);
+        if (afterSalesCase == null || !AfterSalesService.STATUS_REQUESTED.equals(afterSalesCase.getStatus())) {
+            throw new IllegalArgumentException("当前售后工单不适合发送退货指引");
+        }
+        afterSalesService.approveWithReturn(order, returnAddress, reply);
+        orderTimelineService.recordAdminEvent(
+                order,
+                "RETURN_INSTRUCTIONS_ISSUED",
+                "已发送退货指引",
+                "退货地址：%s。说明：%s".formatted(returnAddress.trim(), reply.trim()),
+                actingAdmin == null ? null : actingAdmin.getDisplayName());
+        return toAdminOrderResponse(order);
+    }
+
+    @Transactional
+    public AdminOrderResponse confirmReturnAndRefund(Long id, AppUser actingAdmin, String note) {
+        ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        if (order.getStatus() != OrderStatus.REFUND_REQUESTED) {
+            throw new IllegalArgumentException("当前订单不在回寄退款阶段");
+        }
+        var afterSalesCase = afterSalesService.getCase(order);
+        if (afterSalesCase == null || !AfterSalesService.STATUS_RETURN_SHIPPED.equals(afterSalesCase.getStatus())) {
+            throw new IllegalArgumentException("当前还没有用户回寄的物流信息");
+        }
+        restoreStockForOrder(order);
+        order.setStatus(OrderStatus.REFUNDED);
+        order.setRiskNote(appendRiskNote(order.getRiskNote(), "管理员确认收货并退款", note));
+        orderRepository.save(order);
+        afterSalesService.markRefunded(order, note);
+        orderTimelineService.recordAdminEvent(
+                order,
+                "RETURN_RECEIVED_REFUNDED",
+                "商家确认收货并退款",
+                "平台已确认收到退货并完成退款。%s".formatted(composeOptionalSuffix(note)),
+                actingAdmin == null ? null : actingAdmin.getDisplayName());
+        return toAdminOrderResponse(order);
+    }
+
+    @Transactional
+    public AdminOrderResponse appendLogisticsUpdate(Long id, AppUser actingAdmin, String detail) {
+        ShopOrder order = orderRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("订单不存在"));
+        if (!canAppendLogisticsUpdate(order)) {
+            throw new IllegalArgumentException("当前订单状态暂不支持追加物流节点");
+        }
+        if (blankToNull(order.getShippingCarrier()) == null || blankToNull(order.getTrackingNo()) == null) {
+            throw new IllegalArgumentException("请先填写物流公司和运单号，再追加物流节点");
+        }
+        String normalizedDetail = blankToNull(detail);
+        if (normalizedDetail == null) {
+            throw new IllegalArgumentException("请填写物流节点说明");
+        }
+        orderTimelineService.recordAdminEvent(
+                order,
+                "LOGISTICS_UPDATED",
+                "物流节点更新",
+                normalizedDetail,
+                actingAdmin == null ? null : actingAdmin.getDisplayName());
         return toAdminOrderResponse(order);
     }
 
@@ -244,6 +338,9 @@ public class AdminService {
         AppUser targetAdmin = userRepository.findByUsername(normalizedUsername)
                 .filter(user -> user.getRole() == com.aishop.domain.UserRole.ADMIN)
                 .orElseThrow(() -> new IllegalArgumentException("目标客服账号不存在或不是管理员"));
+        if (session.getAssignedAdmin() != null && session.getAssignedAdmin().getId().equals(targetAdmin.getId())) {
+            throw new IllegalArgumentException("当前会话已经分配给该客服");
+        }
 
         assignSession(session, targetAdmin, Instant.now());
         session.setSummary(appendAssistantSummary(
@@ -348,7 +445,9 @@ public class AdminService {
                 order.getShippedAt(),
                 order.getRiskNote(),
                 order.getCreatedAt(),
-                items);
+                items,
+                orderTimelineService.listOrderTimeline(order),
+                afterSalesService.toResponse(order));
     }
 
     private KnowledgeDocumentResponse toKnowledgeDocumentResponse(KnowledgeDocument document) {
@@ -455,6 +554,12 @@ public class AdminService {
         return current + " | " + suffix;
     }
 
+    private boolean canAppendLogisticsUpdate(ShopOrder order) {
+        return order.getStatus() == OrderStatus.SHIPPED
+                || order.getStatus() == OrderStatus.REFUND_REQUESTED
+                || order.getStatus() == OrderStatus.COMPLETED;
+    }
+
     private String appendAssistantSummary(String current, String speaker, String content) {
         String snippet = (speaker == null ? "" : speaker + "：") + trim(content, 80);
         if (current == null || current.isBlank()) {
@@ -500,11 +605,73 @@ public class AdminService {
         order.setShippedAt(Instant.now());
     }
 
+    private String adminStatusTitle(OrderStatus nextStatus) {
+        return switch (nextStatus) {
+            case PROCESSING -> "订单进入处理中";
+            case SHIPPED -> "订单已发货";
+            case COMPLETED -> "订单已完成";
+            case CANCELLED -> "订单已取消";
+            case CONFIRMED -> "订单回到待发货";
+            case PENDING_CONFIRMATION -> "订单等待确认";
+            case DRAFT -> "订单保存为草稿";
+            case REFUND_REQUESTED -> "订单进入退款审核";
+            case REFUNDED -> "订单已退款";
+        };
+    }
+
+    private String adminStatusDetail(OrderStatus previousStatus,
+                                     OrderStatus nextStatus,
+                                     String shippingCarrier,
+                                     String trackingNo,
+                                     String note) {
+        StringBuilder detail = new StringBuilder()
+                .append("订单状态从 ")
+                .append(statusLabel(previousStatus))
+                .append(" 调整为 ")
+                .append(statusLabel(nextStatus))
+                .append("。");
+        if (nextStatus == OrderStatus.SHIPPED) {
+            detail.append("物流公司 ")
+                    .append(blankToDefault(shippingCarrier, "待补充"))
+                    .append("，运单号 ")
+                    .append(blankToDefault(trackingNo, "待补充"))
+                    .append("。");
+        }
+        detail.append(composeOptionalSuffix(note));
+        return detail.toString();
+    }
+
+    private String statusLabel(OrderStatus status) {
+        return switch (status) {
+            case DRAFT -> "草稿";
+            case PENDING_CONFIRMATION -> "待确认";
+            case CONFIRMED -> "待发货";
+            case PROCESSING -> "处理中";
+            case SHIPPED -> "已发货";
+            case COMPLETED -> "已完成";
+            case REFUND_REQUESTED -> "退款处理中";
+            case REFUNDED -> "已退款";
+            case CANCELLED -> "已取消";
+        };
+    }
+
+    private String composeOptionalSuffix(String note) {
+        if (note == null || note.isBlank()) {
+            return "未补充额外说明。";
+        }
+        return "备注：" + note.trim();
+    }
+
     private String blankToNull(String value) {
         if (value == null || value.isBlank()) {
             return null;
         }
         return value.trim();
+    }
+
+    private String blankToDefault(String value, String fallback) {
+        String normalized = blankToNull(value);
+        return normalized == null ? fallback : normalized;
     }
 
     private String normalizeServiceStatus(String status) {

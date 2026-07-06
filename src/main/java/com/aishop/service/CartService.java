@@ -32,19 +32,22 @@ public class CartService {
     private final ShopOrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final OrderService orderService;
+    private final OrderTimelineService orderTimelineService;
 
     public CartService(CartRepository cartRepository,
                        CartItemRepository cartItemRepository,
                        ProductService productService,
                        ShopOrderRepository orderRepository,
                        OrderItemRepository orderItemRepository,
-                       OrderService orderService) {
+                       OrderService orderService,
+                       OrderTimelineService orderTimelineService) {
         this.cartRepository = cartRepository;
         this.cartItemRepository = cartItemRepository;
         this.productService = productService;
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.orderService = orderService;
+        this.orderTimelineService = orderTimelineService;
     }
 
     @Transactional(readOnly = true)
@@ -157,6 +160,11 @@ public class CartService {
         cart.setCheckedOut(true);
         cartRepository.save(cart);
         cartItemRepository.deleteByCart(cart);
+        orderTimelineService.recordCustomerEvent(
+                order,
+                "ORDER_CREATED",
+                "用户提交购物车订单",
+                "共 %s 件商品，结算金额 %s。".formatted(items.size(), totalAmount));
         return orderService.toResponse(order);
     }
 

@@ -30,6 +30,14 @@ const ADMIN_STATUS_LABELS = {
   CANCELLED: "已取消",
 };
 
+const AFTER_SALES_STATUS_LABELS = {
+  REQUESTED: "等待平台审核",
+  AWAITING_CUSTOMER_RETURN: "等待用户回寄",
+  RETURN_SHIPPED: "用户已回寄",
+  REFUNDED: "售后已完成",
+  REJECTED: "售后已驳回",
+};
+
 const ORDER_FILTERS = [
   { key: "ALL", label: "全部订单" },
   { key: "REFUND_REQUESTED", label: "退款审核" },
@@ -102,6 +110,10 @@ function statusLabel(status) {
   return ADMIN_STATUS_LABELS[status] || status;
 }
 
+function afterSalesStatusLabel(status) {
+  return AFTER_SALES_STATUS_LABELS[status] || "售后处理中";
+}
+
 function assistantServiceStatusLabel(status) {
   return ASSISTANT_SERVICE_STATUS_LABELS[status] || ASSISTANT_SERVICE_STATUS_LABELS.ACTIVE;
 }
@@ -132,6 +144,27 @@ function currentAdminAssistantSession() {
 
 function adminOperators() {
   return adminState.users.filter((user) => user.role === "ADMIN");
+}
+
+function preferredAssignedAdminUsername(session) {
+  const operators = adminOperators();
+  if (!operators.length) {
+    return "";
+  }
+  if (session?.assignedAdminUsername && operators.some((user) => user.username === session.assignedAdminUsername)) {
+    return session.assignedAdminUsername;
+  }
+  if (adminState.user?.username && operators.some((user) => user.username === adminState.user.username)) {
+    return adminState.user.username;
+  }
+  return operators[0].username;
+}
+
+function assistantOperatorOptionLabel(user) {
+  const baseLabel = user.displayName && user.displayName !== user.username
+    ? `${user.displayName} (${user.username})`
+    : (user.displayName || user.username);
+  return adminState.user?.username === user.username ? `${baseLabel} · 当前登录` : baseLabel;
 }
 
 function isClaimedByCurrentAdmin(session) {
@@ -403,6 +436,18 @@ function matchesOrderFilter(order) {
     order.trackingNo,
     order.riskNote,
     statusLabel(order.status),
+    order.afterSales?.status,
+    order.afterSales?.customerReason,
+    order.afterSales?.adminReply,
+    order.afterSales?.returnAddress,
+    order.afterSales?.returnCarrier,
+    order.afterSales?.returnTrackingNo,
+    order.afterSales?.returnNote,
+    ...(order.timeline || []).flatMap((event) => [
+      event.title,
+      event.detail,
+      event.actorLabel,
+    ]),
     ...(order.items || []).flatMap((item) => [
       item.productName,
       item.productSku,
@@ -466,12 +511,15 @@ function renderRefundQueue() {
       <div class="queue-meta">
         <div class="inline-meta">金额 ${money(order.totalAmount)}</div>
         <div class="inline-meta">创建时间 ${formatDateTime(order.createdAt)}</div>
+        ${order.afterSales ? `<div class="inline-meta">售后阶段 ${escapeHtml(afterSalesStatusLabel(order.afterSales.status))}</div>` : ""}
       </div>
       <div class="order-items">
         ${(order.items || []).map((item) => `
           <div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity}</div>
         `).join("")}
       </div>
+      ${order.afterSales?.returnAddress ? `<div class="panel-hint">回寄地址：${escapeHtml(order.afterSales.returnAddress)}</div>` : ""}
+      ${order.afterSales?.returnTrackingNo ? `<div class="panel-hint">用户回寄：${escapeHtml(order.afterSales.returnCarrier || "")} ${escapeHtml(order.afterSales.returnTrackingNo)}</div>` : ""}
       <textarea class="ops-refund-note-input" data-order-id="${order.id}" placeholder="审核意见，例如同意退款原因或驳回说明"></textarea>
       <div class="order-actions">
         <button type="button" class="primary ops-refund-btn" data-order-id="${order.id}" data-approved="true">通过退款</button>
@@ -665,13 +713,16 @@ function renderAssistantSessionDetail() {
   const replyBtn = adminById("adminAssistantReplyBtn");
   const resolveBtn = adminById("adminAssistantResolveBtn");
   const claimBtn = adminById("adminAssistantClaimBtn");
-  if (!meta || !host || !replyInput || !replyBtn || !resolveBtn || !claimBtn) {
+  const assignSelect = adminById("adminAssistantAssignSelect");
+  const assignBtn = adminById("adminAssistantAssignBtn");
+  if (!meta || !host || !replyInput || !replyBtn || !resolveBtn || !claimBtn || !assignSelect || !assignBtn) {
     return;
   }
   if (!adminState.user) {
     meta.textContent = "管理员登录后可查看 AI 会话摘要。";
     host.innerHTML = `<div class="empty-state">登录后可查看 AI 会话消息。</div>`;
     setAssistantReplyState(true, "登录后可发送人工回复");
+    renderAssistantAssignControls(null);
     claimBtn.disabled = true;
     claimBtn.textContent = "认领会话";
     return;
@@ -681,6 +732,7 @@ function renderAssistantSessionDetail() {
     meta.textContent = "选择左侧会话后，这里会展示用户、线程、摘要和意图。";
     host.innerHTML = `<div class="empty-state">当前还没有选中的 AI 会话。</div>`;
     setAssistantReplyState(true, "先选择一条 AI 会话");
+    renderAssistantAssignControls(null);
     claimBtn.disabled = true;
     claimBtn.textContent = "认领会话";
     return;
@@ -694,6 +746,7 @@ function renderAssistantSessionDetail() {
         ? `当前会话由 ${assistantOwnerLabel(session)} 跟进，发送回复会自动转交到当前管理员名下`
         : "当前会话还未认领，发送回复时会自动认领"))
     : "可以主动给用户发送人工回复，也可以发送并结案");
+  renderAssistantAssignControls(session);
   claimBtn.disabled = session.serviceStatus !== "ESCALATED" || ownedByMe;
   claimBtn.textContent = session.serviceStatus !== "ESCALATED"
     ? "无需认领"
@@ -720,6 +773,84 @@ function renderAssistantSessionDetail() {
     </div>
   `).join("");
   host.scrollTop = host.scrollHeight;
+}
+
+function renderAssistantAssignControls(session) {
+  const select = adminById("adminAssistantAssignSelect");
+  const button = adminById("adminAssistantAssignBtn");
+  if (!select || !button) {
+    return;
+  }
+
+  if (!adminState.user) {
+    select.innerHTML = `<option value="">登录后可分派客服</option>`;
+    select.disabled = true;
+    button.disabled = true;
+    button.textContent = "转交给所选客服";
+    return;
+  }
+
+  const operators = adminOperators();
+  if (!operators.length) {
+    select.innerHTML = `<option value="">当前没有可分派的客服账号</option>`;
+    select.disabled = true;
+    button.disabled = true;
+    button.textContent = "转交给所选客服";
+    return;
+  }
+
+  select.innerHTML = operators.map((user) => `
+    <option value="${escapeHtml(user.username)}">${escapeHtml(assistantOperatorOptionLabel(user))}</option>
+  `).join("");
+  select.value = preferredAssignedAdminUsername(session);
+  syncAssistantAssignControls(session);
+}
+
+function syncAssistantAssignControls(session = currentAdminAssistantSession()) {
+  const select = adminById("adminAssistantAssignSelect");
+  const button = adminById("adminAssistantAssignBtn");
+  if (!select || !button) {
+    return;
+  }
+
+  if (!adminState.user) {
+    select.disabled = true;
+    button.disabled = true;
+    button.textContent = "转交给所选客服";
+    return;
+  }
+
+  const operators = adminOperators();
+  const selectedUsername = select.value?.trim() || "";
+  if (!session) {
+    if (!operators.length) {
+      select.innerHTML = `<option value="">当前没有可分派的客服账号</option>`;
+    } else {
+      select.innerHTML = `<option value="">先选择一条 AI 会话</option>`;
+    }
+    select.disabled = true;
+    button.disabled = true;
+    button.textContent = "先选择会话";
+    return;
+  }
+
+  if (session.serviceStatus !== "ESCALATED") {
+    select.disabled = true;
+    button.disabled = true;
+    button.textContent = "当前无需转交";
+    return;
+  }
+
+  const sameOwner = Boolean(session.assignedAdminUsername && selectedUsername === session.assignedAdminUsername);
+  select.disabled = false;
+  button.disabled = !selectedUsername || sameOwner;
+  if (!selectedUsername) {
+    button.textContent = "请选择客服";
+    return;
+  }
+  button.textContent = sameOwner
+    ? "当前已分配"
+    : (session.assignedAdminUsername ? "转交给所选客服" : "分派给所选客服");
 }
 
 function renderAssistantEscalations() {
@@ -933,12 +1064,14 @@ function renderOrders() {
         <div class="inline-meta">金额 ${money(order.totalAmount)} · 地址 ${escapeHtml(order.shippingAddress || "待补充地址")}</div>
       </div>
       ${renderAdminOrderShippingMeta(order)}
+      ${order.afterSales ? `<div class="inline-meta">售后阶段 ${escapeHtml(afterSalesStatusLabel(order.afterSales.status))}</div>` : ""}
       ${order.riskNote ? `<div class="inline-meta">备注 ${escapeHtml(order.riskNote)}</div>` : ""}
       <div class="order-items">
         ${(order.items || []).map((item) => `
           <div>${escapeHtml(item.productName)}${item.productSku ? ` · SKU ${escapeHtml(item.productSku)}` : ""} x ${item.quantity} · ${money(item.lineTotal)}</div>
         `).join("")}
       </div>
+      ${renderAdminOrderTimeline(order)}
       ${renderAdminOrderControls(order)}
     </div>
   `).join("");
@@ -952,6 +1085,15 @@ function renderOrders() {
       button.dataset.approved === "true",
     )));
   });
+  host.querySelectorAll(".issue-return-instructions-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => provideReturnInstructions(Number(button.dataset.orderId))));
+  });
+  host.querySelectorAll(".confirm-return-refund-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => confirmReturnAndRefund(Number(button.dataset.orderId))));
+  });
+  host.querySelectorAll(".save-logistics-update-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => appendLogisticsUpdate(Number(button.dataset.orderId))));
+  });
 }
 
 function renderAdminOrderControls(order) {
@@ -959,22 +1101,20 @@ function renderAdminOrderControls(order) {
   const notePlaceholder = order.status === "REFUND_REQUESTED"
     ? "审核意见，例如同意退款原因或驳回说明"
     : "运营备注，例如催发货、用户沟通结果";
+  const logisticsBlock = renderAdminLogisticsUpdateBlock(order);
 
   if (order.status === "REFUND_REQUESTED") {
     return `
-      <div class="order-action-block">
-        <textarea class="admin-order-note-input" data-order-id="${order.id}" placeholder="${escapeHtml(notePlaceholder)}"></textarea>
-        <div class="order-actions">
-          <button type="button" class="primary refund-review-btn" data-order-id="${order.id}" data-approved="true">同意退款</button>
-          <button type="button" class="ghost refund-review-btn" data-order-id="${order.id}" data-approved="false">驳回退款</button>
-        </div>
-        <div class="panel-hint">同意退款后订单会变成“已退款”并回补库存；驳回后订单会回到“已完成”。</div>
-      </div>
+      ${renderAdminAfterSalesControls(order, notePlaceholder)}
+      ${logisticsBlock}
     `;
   }
 
   if (!nextStatuses.length) {
-    return `<div class="panel-hint">当前订单已经进入最终状态，暂无可继续推进的履约动作。</div>`;
+    return `
+      <div class="panel-hint">当前订单已经进入最终状态，暂无可继续推进的履约动作。</div>
+      ${logisticsBlock}
+    `;
   }
 
   return `
@@ -994,6 +1134,7 @@ function renderAdminOrderControls(order) {
       </div>
       <div class="panel-hint">这里只显示符合当前状态的下一步动作，减少误操作导致的流程跳跃。</div>
     </div>
+    ${logisticsBlock}
   `;
 }
 
@@ -1014,6 +1155,48 @@ function availableNextStatuses(status) {
   }
 }
 
+function renderAdminAfterSalesControls(order, notePlaceholder) {
+  const afterSales = order.afterSales || {};
+  if (afterSales.status === "AWAITING_CUSTOMER_RETURN") {
+    return `
+      <div class="order-action-block">
+        <div class="panel-hint">当前售后阶段：${escapeHtml(afterSalesStatusLabel(afterSales.status))}</div>
+        ${afterSales.returnAddress ? `<div class="inline-meta">回寄地址 ${escapeHtml(afterSales.returnAddress)}</div>` : ""}
+        ${afterSales.adminReply ? `<div class="inline-meta">退货说明 ${escapeHtml(afterSales.adminReply)}</div>` : ""}
+        <div class="panel-hint">等待用户回寄商品并提交回寄单号，收到后再继续退款。</div>
+      </div>
+    `;
+  }
+  if (afterSales.status === "RETURN_SHIPPED") {
+    return `
+      <div class="order-action-block">
+        <div class="panel-hint">当前售后阶段：${escapeHtml(afterSalesStatusLabel(afterSales.status))}</div>
+        ${afterSales.returnAddress ? `<div class="inline-meta">回寄地址 ${escapeHtml(afterSales.returnAddress)}</div>` : ""}
+        <div class="inline-meta">用户回寄物流 ${escapeHtml(afterSales.returnCarrier || "未填写")} · ${escapeHtml(afterSales.returnTrackingNo || "未填写")}</div>
+        ${afterSales.returnNote ? `<div class="inline-meta">用户说明 ${escapeHtml(afterSales.returnNote)}</div>` : ""}
+        <textarea class="admin-order-note-input" data-order-id="${order.id}" placeholder="退款完成备注，例如已验收商品无误"></textarea>
+        <div class="order-actions">
+          <button type="button" class="primary confirm-return-refund-btn" data-order-id="${order.id}">确认收到退货并退款</button>
+          <button type="button" class="ghost refund-review-btn" data-order-id="${order.id}" data-approved="false">驳回退款</button>
+        </div>
+        <div class="panel-hint">确认后订单会变成“已退款”，并记录退货退款完成时间线。</div>
+      </div>
+    `;
+  }
+  return `
+    <div class="order-action-block">
+      <textarea class="admin-order-note-input" data-order-id="${order.id}" placeholder="${escapeHtml(notePlaceholder)}"></textarea>
+      <input class="admin-return-address-input" data-order-id="${order.id}" placeholder="退货回寄地址，例如上海市徐汇区售后仓 3 号门">
+      <div class="order-actions">
+        <button type="button" class="primary refund-review-btn" data-order-id="${order.id}" data-approved="true">直接退款</button>
+        <button type="button" class="secondary issue-return-instructions-btn" data-order-id="${order.id}">发送退货指引</button>
+        <button type="button" class="ghost refund-review-btn" data-order-id="${order.id}" data-approved="false">驳回退款</button>
+      </div>
+      <div class="panel-hint">可直接退款，也可以先给用户发送退货回寄地址和说明，等用户回寄后再确认退款。</div>
+    </div>
+  `;
+}
+
 function shouldShowAdminShippingFields(order, nextStatuses) {
   return nextStatuses.includes("SHIPPED") || Boolean(order.shippingCarrier) || Boolean(order.trackingNo);
 }
@@ -1029,7 +1212,67 @@ function renderAdminOrderShippingMeta(order) {
   if (order.shippedAt) {
     lines.push(`<div class="inline-meta">发货时间 ${escapeHtml(formatDateTime(order.shippedAt))}</div>`);
   }
+  const latest = latestLogisticsEvent(order);
+  if (latest?.detail) {
+    lines.push(`<div class="inline-meta">最新物流 ${escapeHtml(latest.detail)}</div>`);
+  }
   return lines.join("");
+}
+
+function renderAdminLogisticsUpdateBlock(order) {
+  if (!canAppendLogisticsUpdate(order)) {
+    return "";
+  }
+  return `
+    <div class="order-action-block logistics-update-block">
+      <textarea class="admin-logistics-update-input" data-order-id="${order.id}" placeholder="追加物流节点，例如包裹已到上海转运中心，预计明日上午派送"></textarea>
+      <div class="order-actions">
+        <button type="button" class="secondary save-logistics-update-btn" data-order-id="${order.id}">追加物流节点</button>
+      </div>
+      <div class="panel-hint">物流节点会进入订单时间线，客户端订单页和 AI 查物流都会优先读取最新节点。</div>
+    </div>
+  `;
+}
+
+function canAppendLogisticsUpdate(order) {
+  return ["SHIPPED", "REFUND_REQUESTED", "COMPLETED"].includes(order.status)
+    && Boolean(order.shippingCarrier)
+    && Boolean(order.trackingNo);
+}
+
+function latestLogisticsEvent(order) {
+  const timeline = order.timeline || [];
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const event = timeline[index];
+    if (event?.eventType === "LOGISTICS_UPDATED" || event?.eventType === "ORDER_SHIPPED") {
+      return event;
+    }
+  }
+  return null;
+}
+
+function renderAdminOrderTimeline(order) {
+  const timeline = order.timeline || [];
+  if (!timeline.length) {
+    return `<div class="timeline-empty">当前订单还没有可展示的流转轨迹。</div>`;
+  }
+  return `
+    <div class="timeline-list compact">
+      ${timeline.map((event) => `
+        <div class="timeline-item">
+          <div class="timeline-marker"></div>
+          <div class="timeline-content">
+            <div class="row-top">
+              <strong class="timeline-title">${escapeHtml(event.title || "订单进度更新")}</strong>
+              <div class="inline-meta">${escapeHtml(formatDateTime(event.occurredAt))}</div>
+            </div>
+            <div class="inline-meta">处理方 ${escapeHtml(event.actorLabel || "系统")}</div>
+            ${event.detail ? `<div class="timeline-detail">${escapeHtml(event.detail)}</div>` : ""}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderKnowledgeDocs() {
@@ -1327,6 +1570,14 @@ function readAdminTrackingNo(orderId) {
   return document.querySelector(`.admin-tracking-no-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
 }
 
+function readAdminReturnAddress(orderId) {
+  return document.querySelector(`.admin-return-address-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readAdminLogisticsUpdate(orderId) {
+  return document.querySelector(`.admin-logistics-update-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
 function readAssistantReplyContent() {
   return adminById("adminAssistantReplyInput")?.value?.trim() || "";
 }
@@ -1366,6 +1617,33 @@ async function claimAssistantSession(sessionId = adminState.selectedAssistantSes
   });
   await loadAdminData();
   setAdminStatus("AI 会话已认领，可以继续跟进和发送人工回复");
+}
+
+async function assignAssistantSession() {
+  const session = currentAdminAssistantSession();
+  if (!session) {
+    throw new Error("请先选择要分派的 AI 会话");
+  }
+  if (session.serviceStatus !== "ESCALATED") {
+    throw new Error("只有人工跟进中的会话才支持分派");
+  }
+  const adminUsername = adminById("adminAssistantAssignSelect")?.value?.trim() || "";
+  if (!adminUsername) {
+    throw new Error("请选择要转交的客服账号");
+  }
+  if (session.assignedAdminUsername === adminUsername) {
+    throw new Error("当前会话已经分配给该客服");
+  }
+
+  const targetAdmin = adminOperators().find((user) => user.username === adminUsername);
+  await adminFetchJson(`/api/admin/assistant/sessions/${session.id}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ adminUsername }),
+  });
+  adminState.assistantOpsFilter = adminState.user?.username === adminUsername ? "MY_QUEUE" : "ALL";
+  await loadAdminData();
+  const targetLabel = targetAdmin?.displayName || targetAdmin?.username || adminUsername;
+  setAdminStatus(`${session.assignedAdminUsername ? "AI 会话已转交" : "AI 会话已分派"}给 ${targetLabel}`);
 }
 
 async function replyAssistantSession(resolve = false) {
@@ -1411,6 +1689,43 @@ async function reviewRefund(orderId, approved, explicitNote = null) {
   });
   await loadAdminData();
   setAdminStatus(approved ? "退款申请已通过，库存已回补" : "退款申请已驳回，订单回到已完成");
+}
+
+async function appendLogisticsUpdate(orderId) {
+  const detail = readAdminLogisticsUpdate(orderId);
+  if (!detail) {
+    throw new Error("请先填写物流节点说明");
+  }
+  await adminFetchJson(`/api/admin/orders/${orderId}/logistics-updates`, {
+    method: "POST",
+    body: JSON.stringify({ detail }),
+  });
+  await loadAdminData();
+  setAdminStatus("物流节点已追加，客户端和 AI 查询都会同步看到最新进展");
+}
+
+async function provideReturnInstructions(orderId) {
+  const returnAddress = readAdminReturnAddress(orderId);
+  const reply = readAdminOrderNote(orderId);
+  if (!returnAddress || !reply) {
+    throw new Error("请先填写退货回寄地址和退货说明");
+  }
+  await adminFetchJson(`/api/admin/orders/${orderId}/after-sales/return-instructions`, {
+    method: "POST",
+    body: JSON.stringify({ returnAddress, reply }),
+  });
+  await loadAdminData();
+  setAdminStatus("退货指引已发送，客户端会看到回寄地址和售后说明");
+}
+
+async function confirmReturnAndRefund(orderId) {
+  const note = readAdminOrderNote(orderId);
+  await adminFetchJson(`/api/admin/orders/${orderId}/after-sales/confirm-return-refund`, {
+    method: "POST",
+    body: JSON.stringify({ approved: true, note }),
+  });
+  await loadAdminData();
+  setAdminStatus("已确认收到退货并完成退款");
 }
 
 function focusOrder(orderNo, filterStatus = "ALL") {
@@ -1510,6 +1825,8 @@ document.addEventListener("DOMContentLoaded", () => {
   adminById("refreshDashboardBtn").addEventListener("click", () => runAdminAction(loadAdminData));
   adminById("refreshAssistantOpsBtn").addEventListener("click", () => runAdminAction(loadAdminData));
   adminById("adminAssistantClaimBtn").addEventListener("click", () => runAdminAction(() => claimAssistantSession()));
+  adminById("adminAssistantAssignSelect").addEventListener("change", () => syncAssistantAssignControls());
+  adminById("adminAssistantAssignBtn").addEventListener("click", () => runAdminAction(assignAssistantSession));
   adminById("adminAssistantReplyBtn").addEventListener("click", () => runAdminAction(() => replyAssistantSession(false)));
   adminById("adminAssistantResolveBtn").addEventListener("click", () => runAdminAction(() => replyAssistantSession(true)));
   adminById("productForm").addEventListener("submit", (event) => runAdminAction(() => saveProduct(event)));

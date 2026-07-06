@@ -21,8 +21,10 @@ import com.aishop.dto.AdminDtos.AdminUserResponse;
 import com.aishop.dto.AdminDtos.DashboardMetricResponse;
 import com.aishop.dto.AdminDtos.KnowledgeDocumentResponse;
 import com.aishop.dto.AdminDtos.KnowledgeSearchResponse;
+import com.aishop.dto.AdminDtos.OrderLogisticsUpdateRequest;
 import com.aishop.dto.AdminDtos.ProductUpsertRequest;
 import com.aishop.dto.AdminDtos.RefundReviewRequest;
+import com.aishop.dto.AdminDtos.ReturnInstructionRequest;
 import com.aishop.dto.AdminDtos.UpdateOrderStatusRequest;
 import com.aishop.dto.KnowledgeDtos.ImportRequest;
 import com.aishop.dto.ProductDtos.ProductResponse;
@@ -83,16 +85,40 @@ public class AdminController {
     public AdminOrderResponse updateOrderStatus(HttpSession session,
                                                 @PathVariable Long id,
                                                 @RequestBody UpdateOrderStatusRequest request) {
-        authService.requireAdmin(session);
-        return adminService.updateOrderStatus(id, request.status(), request.note(), request.shippingCarrier(), request.trackingNo());
+        var admin = authService.requireAdmin(session);
+        return adminService.updateOrderStatus(id, admin, request.status(), request.note(), request.shippingCarrier(), request.trackingNo());
     }
 
     @PatchMapping("/api/admin/orders/{id}/refund-review")
     public AdminOrderResponse reviewRefund(HttpSession session,
                                            @PathVariable Long id,
                                            @RequestBody RefundReviewRequest request) {
-        authService.requireAdmin(session);
-        return adminService.reviewRefund(id, request.approved(), request.note());
+        var admin = authService.requireAdmin(session);
+        return adminService.reviewRefund(id, admin, request.approved(), request.note());
+    }
+
+    @PostMapping("/api/admin/orders/{id}/logistics-updates")
+    public AdminOrderResponse appendLogisticsUpdate(HttpSession session,
+                                                    @PathVariable Long id,
+                                                    @RequestBody OrderLogisticsUpdateRequest request) {
+        var admin = authService.requireAdmin(session);
+        return adminService.appendLogisticsUpdate(id, admin, request.detail());
+    }
+
+    @PostMapping("/api/admin/orders/{id}/after-sales/return-instructions")
+    public AdminOrderResponse provideReturnInstructions(HttpSession session,
+                                                        @PathVariable Long id,
+                                                        @RequestBody ReturnInstructionRequest request) {
+        var admin = authService.requireAdmin(session);
+        return adminService.provideReturnInstructions(id, admin, request.returnAddress(), request.reply());
+    }
+
+    @PostMapping("/api/admin/orders/{id}/after-sales/confirm-return-refund")
+    public AdminOrderResponse confirmReturnAndRefund(HttpSession session,
+                                                     @PathVariable Long id,
+                                                     @RequestBody RefundReviewRequest request) {
+        var admin = authService.requireAdmin(session);
+        return adminService.confirmReturnAndRefund(id, admin, request.note());
     }
 
     @GetMapping("/api/admin/knowledge/documents")

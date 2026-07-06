@@ -548,8 +548,94 @@ textarea {
   gap: 10px;
 }
 
+.timeline-list {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.timeline-list.compact {
+  padding: 10px 12px;
+}
+
+.timeline-item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.timeline-marker {
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.timeline-content {
+  display: grid;
+  gap: 4px;
+}
+
+.timeline-title {
+  font-size: 14px;
+}
+
+.timeline-detail {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.timeline-empty {
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.after-sales-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.after-sales-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.after-sales-return-form {
+  display: grid;
+  gap: 10px;
+}
+
+.after-sales-return-form textarea,
+.after-sales-return-form input,
+.after-sales-panel input {
+  background: var(--surface);
+}
+
+.after-sales-return-form textarea {
+  min-height: 82px;
+}
+
 .order-note-input {
   min-height: 88px;
+  background: var(--surface);
+}
+
+.logistics-update-block textarea {
+  min-height: 84px;
   background: var(--surface);
 }
 
@@ -559,6 +645,10 @@ textarea {
 
 .admin-order-note-input {
   min-height: 86px;
+  background: var(--surface);
+}
+
+.admin-return-address-input {
   background: var(--surface);
 }
 
@@ -638,6 +728,17 @@ textarea {
 .assistant-reply-box {
   display: grid;
   gap: 10px;
+}
+
+.assistant-assign-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.assistant-assign-box select {
+  background: var(--surface);
 }
 
 .assistant-reply-box textarea {
@@ -744,6 +845,7 @@ textarea {
   .search-cluster,
   .auth-fields,
   .auth-actions,
+  .assistant-assign-box,
   .order-actions,
   .filter-toolbar,
   .row-top,
