@@ -27,11 +27,14 @@ import com.aishop.dto.AdminDtos.RefundReviewRequest;
 import com.aishop.dto.AdminDtos.ReturnInstructionRequest;
 import com.aishop.dto.AdminDtos.UpdateOrderStatusRequest;
 import com.aishop.dto.KnowledgeDtos.ImportRequest;
+import com.aishop.dto.PromotionDtos.PromotionResponse;
+import com.aishop.dto.PromotionDtos.PromotionUpsertRequest;
 import com.aishop.dto.ProductDtos.ProductResponse;
 import com.aishop.dto.ProductDtos.ProductReviewResponse;
 import com.aishop.service.AdminService;
 import com.aishop.service.AuthService;
 import com.aishop.service.KnowledgeService;
+import com.aishop.service.PromotionService;
 import com.aishop.service.ProductReviewService;
 
 import jakarta.servlet.http.HttpSession;
@@ -43,15 +46,18 @@ public class AdminController {
     private final AdminService adminService;
     private final KnowledgeService knowledgeService;
     private final ProductReviewService productReviewService;
+    private final PromotionService promotionService;
 
     public AdminController(AuthService authService,
                            AdminService adminService,
                            KnowledgeService knowledgeService,
-                           ProductReviewService productReviewService) {
+                           ProductReviewService productReviewService,
+                           PromotionService promotionService) {
         this.authService = authService;
         this.adminService = adminService;
         this.knowledgeService = knowledgeService;
         this.productReviewService = productReviewService;
+        this.promotionService = promotionService;
     }
 
     @GetMapping("/api/admin/dashboard")
@@ -78,6 +84,26 @@ public class AdminController {
                                          @RequestBody ProductUpsertRequest request) {
         authService.requireAdmin(session);
         return adminService.updateProduct(id, request);
+    }
+
+    @GetMapping("/api/admin/promotions")
+    public List<PromotionResponse> promotions(HttpSession session) {
+        authService.requireAdmin(session);
+        return promotionService.listAll();
+    }
+
+    @PostMapping("/api/admin/promotions")
+    public PromotionResponse createPromotion(HttpSession session, @RequestBody PromotionUpsertRequest request) {
+        authService.requireAdmin(session);
+        return promotionService.create(request);
+    }
+
+    @PutMapping("/api/admin/promotions/{id}")
+    public PromotionResponse updatePromotion(HttpSession session,
+                                             @PathVariable Long id,
+                                             @RequestBody PromotionUpsertRequest request) {
+        authService.requireAdmin(session);
+        return promotionService.update(id, request);
     }
 
     @GetMapping("/api/admin/orders")

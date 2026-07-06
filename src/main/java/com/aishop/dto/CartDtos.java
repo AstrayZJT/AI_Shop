@@ -20,5 +20,5 @@ public final class CartDtos {
                                Integer totalItems,
                                BigDecimal totalAmount,
                                List<CartItemResponse> items) {}
-    public record CheckoutRequest(String shippingAddress) {}
+    public record CheckoutRequest(String shippingAddress, String promotionCode) {}
 }

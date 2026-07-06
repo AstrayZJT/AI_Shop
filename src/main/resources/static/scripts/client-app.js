@@ -14,6 +14,9 @@ const clientState = {
   recommendationScene: "AUTO",
   selectedProductId: null,
   selectedProduct: null,
+  productReviewsById: {},
+  loadingProductReviews: {},
+  productReviewErrors: {},
 };
 
 const ORDER_STATUS_LABELS = {
@@ -480,6 +483,139 @@ function renderRecommendationPanel() {
   bindCatalogActionButtons(host);
 }
 
+function selectedProductReviews() {
+  return clientState.productReviewsById[clientState.selectedProductId] || [];
+}
+
+function selectedProductReviewLoading() {
+  return Boolean(clientState.selectedProductId && clientState.loadingProductReviews[clientState.selectedProductId]);
+}
+
+function selectedProductReviewError() {
+  return clientState.productReviewErrors[clientState.selectedProductId] || "";
+}
+
+function reviewStars(rating) {
+  const normalized = Math.max(1, Math.min(5, Number(rating || 0)));
+  return "★".repeat(normalized) + "☆".repeat(5 - normalized);
+}
+
+function renderSelectedProductReviews() {
+  if (selectedProductReviewLoading()) {
+    return `<div class="empty-state">正在加载这款商品的评价与口碑摘要...</div>`;
+  }
+  const error = selectedProductReviewError();
+  if (error) {
+    return `<div class="empty-state">评价加载失败：${escapeHtml(error)}</div>`;
+  }
+  const reviews = selectedProductReviews();
+  if (!reviews.length) {
+    return `<div class="empty-state">这款商品暂时还没有成交评价，首单完成后就会开始沉淀口碑内容。</div>`;
+  }
+  return `
+    <div class="product-review-list">
+      ${reviews.slice(0, 4).map((review) => `
+        <article class="product-review-card">
+          <div class="product-review-card-head">
+            <div>
+              <strong>${escapeHtml(review.displayName || review.username || "已购用户")}</strong>
+              <div class="inline-meta">订单 ${escapeHtml(review.orderNo || "-")} · ${escapeHtml(formatMessageTime(review.createdAt))}</div>
+            </div>
+            <div class="product-review-score">${escapeHtml(reviewStars(review.rating))} · ${escapeHtml(String(review.rating || 0))}.0</div>
+          </div>
+          <div>${escapeHtml(review.content || "")}</div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderProductDetailPanel() {
+  const host = clientById("productDetailPanel");
+  if (!host) {
+    return;
+  }
+  const product = selectedCatalogProduct() || ensureSelectedProduct(filteredProducts());
+  if (!product) {
+    host.innerHTML = `<div class="empty-state">先从上面的商品目录里选一件商品，这里会展示更完整的详情、口碑和 AI 快捷动作。</div>`;
+    return;
+  }
+  host.innerHTML = `
+    <section class="product-detail-card">
+      <div class="section-head">
+        <div>
+          <h2>商品详情与口碑</h2>
+          <p>把当前选中商品的关键信息、购买提示和真实评价收在一起，方便边比较边决策。</p>
+        </div>
+        <div class="order-actions">
+          <button type="button" class="ghost product-refresh-reviews-btn" data-product-id="${product.id}">刷新口碑</button>
+          <button type="button" class="ghost product-ai-btn" data-product-id="${product.id}" data-mode="compare">让 AI 对比</button>
+        </div>
+      </div>
+      <div class="product-detail-layout">
+        <div class="product-detail-media">
+          <img src="${product.imageUrl || "/favicon.svg"}" alt="${escapeHtml(product.name)}">
+          <div class="product-detail-facts">
+            <div class="product-detail-fact">
+              <span class="inline-meta">价格</span>
+              <strong>${currency(product.price)}</strong>
+            </div>
+            <div class="product-detail-fact">
+              <span class="inline-meta">库存</span>
+              <strong>${escapeHtml(Number(product.stock || 0) > 0 ? `${product.stock} 件现货` : "暂时缺货")}</strong>
+            </div>
+            <div class="product-detail-fact">
+              <span class="inline-meta">SKU</span>
+              <strong>${escapeHtml(product.sku || "-")}</strong>
+            </div>
+            <div class="product-detail-fact">
+              <span class="inline-meta">分类</span>
+              <strong>${escapeHtml(product.category || "未分类")}</strong>
+            </div>
+          </div>
+        </div>
+        <div class="product-detail-summary">
+          <div>
+            <span class="eyebrow">Selected Product</span>
+            <h3>${escapeHtml(product.name)}</h3>
+          </div>
+          <div class="product-meta">${escapeHtml(product.description || "暂无更多商品描述")}</div>
+          ${renderProductRating(product)}
+          <div class="panel-hint">${escapeHtml(product.reviewSummary || recommendationNarrative(product))}</div>
+          <div class="product-detail-facts">
+            <div class="product-detail-fact">
+              <span class="inline-meta">适合人群</span>
+              <div>${escapeHtml(productAudienceText(product))}</div>
+            </div>
+            <div class="product-detail-fact">
+              <span class="inline-meta">购买提示</span>
+              <div>${escapeHtml(productPurchaseHint(product))}</div>
+            </div>
+          </div>
+          <div class="order-actions">
+            <button type="button" class="primary product-add-cart-btn" data-product-id="${product.id}">加入购物车</button>
+            <button type="button" class="ghost product-ai-btn" data-product-id="${product.id}" data-mode="guide">问 AI 适不适合我</button>
+            <button type="button" class="ghost product-ai-btn" data-product-id="${product.id}" data-mode="draft">生成下单草稿</button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="section-head compact">
+          <div>
+            <h2>最近评价</h2>
+            <p>这里展示已完成订单沉淀下来的用户反馈，管理端也能同步查看。</p>
+          </div>
+        </div>
+        ${renderSelectedProductReviews()}
+      </div>
+    </section>
+  `;
+  bindCatalogActionButtons(host);
+  host.querySelectorAll(".product-refresh-reviews-btn").forEach((button) => {
+    button.addEventListener("click", () => runClientAction(() => loadProductReviews(Number(button.dataset.productId), { force: true })));
+  });
+}
+
 function renderProducts() {
   const products = sortProducts(filteredProducts());
   const host = clientById("productGrid");
@@ -496,7 +632,7 @@ function renderProducts() {
   }
   ensureSelectedProduct(products);
   host.innerHTML = products.map((product) => `
-    <article class="product-card">
+    <article class="product-card ${clientState.selectedProductId === product.id ? "active" : ""}">
       <img src="${product.imageUrl || "/favicon.svg"}" alt="${escapeHtml(product.name)}">
       <div class="product-body">
         <div class="tag">${escapeHtml(product.category || "未分类")}</div>
@@ -579,6 +715,8 @@ async function openProductDetail(productId) {
   }
   clientState.selectedProductId = productId;
   renderCatalogExperience();
+  await loadProductReviews(productId, { force: true });
+  clientById("productDetailPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function askAiAboutProduct(productId, mode) {
@@ -605,11 +743,58 @@ function bindCatalogActionButtons(host) {
   });
 }
 
+async function loadProductReviews(productId, options = {}) {
+  const force = Boolean(options.force);
+  if (!productId) {
+    return [];
+  }
+  if (!force && Array.isArray(clientState.productReviewsById[productId])) {
+    return clientState.productReviewsById[productId];
+  }
+  if (clientState.loadingProductReviews[productId]) {
+    return clientState.loadingProductReviews[productId];
+  }
+  const pending = (async () => {
+    clientState.productReviewErrors[productId] = "";
+    if (clientState.selectedProductId === productId) {
+      renderProductDetailPanel();
+    }
+    try {
+      const reviews = await clientFetchJson(`/api/products/${productId}/reviews`);
+      clientState.productReviewsById[productId] = reviews || [];
+      return clientState.productReviewsById[productId];
+    } catch (error) {
+      clientState.productReviewErrors[productId] = error.message || "评价加载失败";
+      return [];
+    } finally {
+      delete clientState.loadingProductReviews[productId];
+      if (clientState.selectedProductId === productId) {
+        renderProductDetailPanel();
+      }
+    }
+  })();
+  clientState.loadingProductReviews[productId] = pending;
+  return pending;
+}
+
+function maybeLoadSelectedProductReviews() {
+  const product = selectedCatalogProduct() || ensureSelectedProduct(filteredProducts());
+  if (!product) {
+    return;
+  }
+  if (Array.isArray(clientState.productReviewsById[product.id]) || clientState.loadingProductReviews[product.id]) {
+    return;
+  }
+  void loadProductReviews(product.id);
+}
+
 function renderCatalogExperience() {
   renderCategories();
   renderRecommendationScenes();
   renderRecommendationPanel();
+  renderProductDetailPanel();
   renderProducts();
+  maybeLoadSelectedProductReviews();
 }
 
 function renderCart() {

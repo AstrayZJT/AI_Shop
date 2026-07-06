@@ -29,6 +29,18 @@ public class ShopOrder extends BaseEntity {
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal totalAmount;
 
+    @Column(precision = 12, scale = 2)
+    private BigDecimal originalAmount;
+
+    @Column(precision = 12, scale = 2)
+    private BigDecimal discountAmount;
+
+    @Column(length = 32)
+    private String promotionCode;
+
+    @Column(length = 128)
+    private String promotionTitle;
+
     @Column(nullable = false, length = 512)
     private String shippingAddress;
 
@@ -81,6 +93,38 @@ public class ShopOrder extends BaseEntity {
 
     public void setTotalAmount(BigDecimal totalAmount) {
         this.totalAmount = totalAmount;
+    }
+
+    public BigDecimal getOriginalAmount() {
+        return originalAmount;
+    }
+
+    public void setOriginalAmount(BigDecimal originalAmount) {
+        this.originalAmount = originalAmount;
+    }
+
+    public BigDecimal getDiscountAmount() {
+        return discountAmount;
+    }
+
+    public void setDiscountAmount(BigDecimal discountAmount) {
+        this.discountAmount = discountAmount;
+    }
+
+    public String getPromotionCode() {
+        return promotionCode;
+    }
+
+    public void setPromotionCode(String promotionCode) {
+        this.promotionCode = promotionCode;
+    }
+
+    public String getPromotionTitle() {
+        return promotionTitle;
+    }
+
+    public void setPromotionTitle(String promotionTitle) {
+        this.promotionTitle = promotionTitle;
     }
 
     public String getShippingAddress() {

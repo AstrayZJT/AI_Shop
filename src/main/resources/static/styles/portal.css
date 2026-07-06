@@ -273,6 +273,12 @@ textarea {
   margin-bottom: 18px;
 }
 
+.product-detail-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
 .recommendation-hero,
 .recommendation-detail,
 .recommendation-mini {
@@ -371,6 +377,11 @@ textarea {
   box-shadow: var(--shadow);
 }
 
+.product-card.active {
+  border-color: rgba(15, 118, 110, 0.32);
+  box-shadow: 0 20px 40px rgba(15, 118, 110, 0.14);
+}
+
 .product-card img {
   display: block;
   width: 100%;
@@ -387,6 +398,90 @@ textarea {
 .product-body h3 {
   margin: 0;
   font-size: 17px;
+}
+
+.product-detail-card {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.product-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(0, 1.1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.product-detail-media {
+  display: grid;
+  gap: 10px;
+}
+
+.product-detail-media img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.product-detail-summary {
+  display: grid;
+  gap: 12px;
+}
+
+.product-detail-summary h3 {
+  margin: 0;
+}
+
+.product-detail-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 10px;
+}
+
+.product-detail-fact {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-alt);
+  border: 1px solid rgba(15, 23, 42, 0.05);
+}
+
+.product-detail-fact strong {
+  font-size: 18px;
+}
+
+.product-review-list {
+  display: grid;
+  gap: 12px;
+}
+
+.product-review-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.product-review-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.product-review-score {
+  font-weight: 800;
+  color: var(--accent);
 }
 
 .product-meta,
@@ -1061,7 +1156,8 @@ textarea {
   .split-grid,
   .masthead-grid,
   .recommendation-hero,
-  .recommendation-detail-grid {
+  .recommendation-detail-grid,
+  .product-detail-layout {
     grid-template-columns: 1fr;
   }
 

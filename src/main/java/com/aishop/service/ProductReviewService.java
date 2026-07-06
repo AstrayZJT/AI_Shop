@@ -124,14 +124,21 @@ public class ProductReviewService {
     public ProductReviewResponse toResponse(ProductReview review) {
         Product product = review.getProduct();
         AppUser user = review.getUser();
+        OrderItem orderItem = review.getOrderItem();
+        var order = review.getOrder();
+        Long productId = product != null ? product.getId() : null;
+        String productSku = firstNonBlank(product != null ? product.getSku() : null, orderItem != null ? orderItem.getProductSku() : null);
+        String productName = firstNonBlank(product != null ? product.getName() : null, orderItem != null ? orderItem.getProductName() : null, "商品信息暂缺");
+        String username = firstNonBlank(user != null ? user.getUsername() : null, "unknown");
+        String displayName = firstNonBlank(user != null ? user.getDisplayName() : null, username, "已购用户");
         return new ProductReviewResponse(
                 review.getId(),
-                product.getId(),
-                product.getSku(),
-                product.getName(),
-                review.getOrder().getOrderNo(),
-                user.getUsername(),
-                user.getDisplayName(),
+                productId,
+                productSku,
+                productName,
+                order != null ? order.getOrderNo() : null,
+                username,
+                displayName,
                 review.getRating(),
                 review.getContent(),
                 review.getCreatedAt());
@@ -160,5 +167,14 @@ public class ProductReviewService {
             return "";
         }
         return value.length() <= maxLength ? value : value.substring(0, maxLength) + "...";
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 }

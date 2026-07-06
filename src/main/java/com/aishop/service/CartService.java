@@ -1,6 +1,7 @@
 package com.aishop.service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -33,6 +34,7 @@ public class CartService {
     private final OrderItemRepository orderItemRepository;
     private final OrderService orderService;
     private final OrderTimelineService orderTimelineService;
+    private final PromotionService promotionService;
 
     public CartService(CartRepository cartRepository,
                        CartItemRepository cartItemRepository,
@@ -40,7 +42,8 @@ public class CartService {
                        ShopOrderRepository orderRepository,
                        OrderItemRepository orderItemRepository,
                        OrderService orderService,
-                       OrderTimelineService orderTimelineService) {
+                       OrderTimelineService orderTimelineService,
+                       PromotionService promotionService) {
         this.cartRepository = cartRepository;
         this.cartItemRepository = cartItemRepository;
         this.productService = productService;
@@ -48,6 +51,7 @@ public class CartService {
         this.orderItemRepository = orderItemRepository;
         this.orderService = orderService;
         this.orderTimelineService = orderTimelineService;
+        this.promotionService = promotionService;
     }
 
     @Transactional(readOnly = true)
@@ -119,7 +123,7 @@ public class CartService {
     }
 
     @Transactional
-    public OrderResponse checkout(AppUser user, String shippingAddress) {
+    public OrderResponse checkout(AppUser user, String shippingAddress, String promotionCode) {
         Cart cart = cartRepository.findByUserAndCheckedOutFalse(user)
                 .orElseThrow(() -> new IllegalArgumentException("购物车为空"));
         List<CartItem> items = cartItemRepository.findByCart(cart);
@@ -127,22 +131,30 @@ public class CartService {
             throw new IllegalArgumentException("购物车为空");
         }
 
-        BigDecimal totalAmount = BigDecimal.ZERO;
+        BigDecimal originalAmount = BigDecimal.ZERO;
         for (CartItem item : items) {
             Product product = productService.getProduct(item.getProduct().getId());
             productService.decreaseStock(product, item.getQuantity());
-            totalAmount = totalAmount.add(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
+            originalAmount = originalAmount.add(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
         }
+        originalAmount = originalAmount.setScale(2, RoundingMode.HALF_UP);
+        PromotionService.PromotionCalculation promotionCalculation = promotionService.resolvePromotion(promotionCode, originalAmount);
 
         ShopOrder order = new ShopOrder();
         order.setOrderNo("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         order.setUser(user);
         order.setStatus(OrderStatus.PENDING_PAYMENT);
-        order.setTotalAmount(totalAmount);
+        order.setOriginalAmount(originalAmount);
+        order.setDiscountAmount(promotionCalculation.discountAmount());
+        order.setTotalAmount(promotionCalculation.payableAmount());
+        order.setPromotionCode(promotionCalculation.campaign() == null ? null : promotionCalculation.campaign().getCode());
+        order.setPromotionTitle(promotionCalculation.campaign() == null ? null : promotionCalculation.campaign().getTitle());
         order.setShippingAddress((shippingAddress == null || shippingAddress.isBlank())
                 ? (user.getShippingAddress() == null ? "待补充收货地址" : user.getShippingAddress())
                 : shippingAddress);
-        order.setRiskNote("客户端购物车结算创建，等待支付");
+        order.setRiskNote(promotionCalculation.discountAmount().compareTo(BigDecimal.ZERO) > 0
+                ? "客户端购物车结算创建，已使用优惠后等待支付"
+                : "客户端购物车结算创建，等待支付");
         order = orderRepository.save(order);
 
         for (CartItem item : items) {
@@ -164,7 +176,13 @@ public class CartService {
                 order,
                 "ORDER_CREATED",
                 "用户提交购物车订单",
-                "共 %s 件商品，结算金额 %s，当前待支付。".formatted(items.size(), totalAmount));
+                buildCheckoutTimelineDetail(
+                        items.size(),
+                        originalAmount,
+                        promotionCalculation.discountAmount(),
+                        promotionCalculation.payableAmount(),
+                        order.getPromotionCode(),
+                        order.getPromotionTitle()));
         return orderService.toResponse(order);
     }
 
@@ -196,5 +214,21 @@ public class CartService {
                 .map(CartItemResponse::lineTotal)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         return new CartResponse(cart.getId(), totalItems, totalAmount, itemResponses);
+    }
+
+    private String buildCheckoutTimelineDetail(int itemCount,
+                                               BigDecimal originalAmount,
+                                               BigDecimal discountAmount,
+                                               BigDecimal payableAmount,
+                                               String promotionCode,
+                                               String promotionTitle) {
+        if (discountAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            return "共 " + itemCount + " 件商品，结算金额 " + originalAmount + "，当前待支付。";
+        }
+        String promotionLabel = promotionTitle == null || promotionTitle.isBlank()
+                ? promotionCode
+                : promotionTitle + " (" + promotionCode + ")";
+        return "共 " + itemCount + " 件商品，原价 " + originalAmount + "，优惠 " + discountAmount
+                + "，实付 " + payableAmount + "，使用活动 " + promotionLabel + "。";
     }
 }
