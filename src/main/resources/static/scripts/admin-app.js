@@ -9,6 +9,7 @@ const adminState = {
   users: [],
   assistantSessions: [],
   assistantMessages: [],
+  assistantEscalations: [],
   assistantDrafts: [],
   selectedAssistantSessionId: null,
   editingProductId: null,
@@ -37,6 +38,12 @@ const ORDER_FILTERS = [
   { key: "REFUNDED", label: "已退款" },
   { key: "CANCELLED", label: "已取消" },
 ];
+
+const ASSISTANT_SERVICE_STATUS_LABELS = {
+  ACTIVE: "AI 在线服务中",
+  ESCALATED: "人工跟进中",
+  RESOLVED: "人工已回复",
+};
 
 function adminById(id) {
   return document.getElementById(id);
@@ -78,6 +85,34 @@ function escapeHtml(value) {
 
 function statusLabel(status) {
   return ADMIN_STATUS_LABELS[status] || status;
+}
+
+function assistantServiceStatusLabel(status) {
+  return ASSISTANT_SERVICE_STATUS_LABELS[status] || ASSISTANT_SERVICE_STATUS_LABELS.ACTIVE;
+}
+
+function assistantServiceTagClass(status) {
+  if (status === "ESCALATED") {
+    return "warning";
+  }
+  if (status === "RESOLVED") {
+    return "success";
+  }
+  return "";
+}
+
+function assistantMessageRoleLabel(role) {
+  if (role === "user") {
+    return "用户";
+  }
+  if (role === "support") {
+    return "人工客服";
+  }
+  return "AI 客服";
+}
+
+function currentAdminAssistantSession() {
+  return adminState.assistantSessions.find((item) => item.id === adminState.selectedAssistantSessionId) || null;
 }
 
 function formatDateTime(value) {
@@ -395,6 +430,7 @@ function renderOperationsWorkbench() {
 function renderAssistantOperations() {
   renderAssistantSessions();
   renderAssistantSessionDetail();
+  renderAssistantEscalations();
   renderAssistantDrafts();
 }
 
@@ -414,7 +450,10 @@ function renderAssistantSessions() {
 
   host.innerHTML = adminState.assistantSessions.map((session) => `
     <button type="button" class="session-pill admin-session-pill ${adminState.selectedAssistantSessionId === session.id ? "active" : ""}" data-assistant-session-id="${session.id}">
-      <strong>${escapeHtml(session.displayName || session.username)}</strong>
+      <div class="row-top">
+        <strong>${escapeHtml(session.displayName || session.username)}</strong>
+        <div class="tag ${assistantServiceTagClass(session.serviceStatus)}">${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</div>
+      </div>
       <div class="inline-meta">${escapeHtml(session.lastIntent || "chat")} · ${escapeHtml(formatDateTime(session.createdAt))}</div>
       <div class="inline-meta">${escapeHtml(session.summary || "暂无摘要")}</div>
       <div class="inline-meta">${escapeHtml(session.threadId)} · ${session.messageCount} 条消息</div>
@@ -429,22 +468,35 @@ function renderAssistantSessions() {
 function renderAssistantSessionDetail() {
   const meta = adminById("adminAssistantSessionMeta");
   const host = adminById("adminAssistantMessages");
-  if (!meta || !host) {
+  const replyInput = adminById("adminAssistantReplyInput");
+  const replyBtn = adminById("adminAssistantReplyBtn");
+  const resolveBtn = adminById("adminAssistantResolveBtn");
+  if (!meta || !host || !replyInput || !replyBtn || !resolveBtn) {
     return;
   }
   if (!adminState.user) {
     meta.textContent = "管理员登录后可查看 AI 会话摘要。";
     host.innerHTML = `<div class="empty-state">登录后可查看 AI 会话消息。</div>`;
+    setAssistantReplyState(true, "登录后可发送人工回复");
     return;
   }
-  const session = adminState.assistantSessions.find((item) => item.id === adminState.selectedAssistantSessionId);
+  const session = currentAdminAssistantSession();
   if (!session) {
     meta.textContent = "选择左侧会话后，这里会展示用户、线程、摘要和意图。";
     host.innerHTML = `<div class="empty-state">当前还没有选中的 AI 会话。</div>`;
+    setAssistantReplyState(true, "先选择一条 AI 会话");
     return;
   }
 
-  meta.textContent = `用户：${session.displayName || session.username} | 会话：${session.threadId} | 意图：${session.lastIntent || "chat"} | 消息数：${session.messageCount}`;
+  setAssistantReplyState(false, session.serviceStatus === "ESCALATED"
+    ? "当前会话已转人工，输入回复后客户端会立即看到"
+    : "可以主动给用户发送人工回复，也可以发送并结案");
+  meta.innerHTML = `
+    <div><strong>用户：</strong>${escapeHtml(session.displayName || session.username)} / ${escapeHtml(session.username)}</div>
+    <div><strong>会话：</strong>${escapeHtml(session.threadId)} · <strong>状态：</strong>${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</div>
+    <div><strong>意图：</strong>${escapeHtml(session.lastIntent || "chat")} · <strong>消息数：</strong>${session.messageCount}</div>
+    <div><strong>摘要：</strong>${escapeHtml(session.summary || "暂无摘要")}</div>
+  `;
   if (!adminState.assistantMessages.length) {
     host.innerHTML = `<div class="empty-state">当前会话还没有消息。</div>`;
     return;
@@ -452,11 +504,51 @@ function renderAssistantSessionDetail() {
 
   host.innerHTML = adminState.assistantMessages.map((message) => `
     <div class="message-bubble ${message.role}">
+      <div class="message-role">${escapeHtml(assistantMessageRoleLabel(message.role))}</div>
       <div>${escapeHtml(message.content).replaceAll("\n", "<br>")}</div>
       <div class="inline-meta">${escapeHtml(formatDateTime(message.createdAt))}</div>
     </div>
   `).join("");
   host.scrollTop = host.scrollHeight;
+}
+
+function renderAssistantEscalations() {
+  const host = adminById("adminAssistantEscalationList");
+  if (!host) {
+    return;
+  }
+  if (!adminState.user) {
+    host.innerHTML = `<div class="empty-state">登录后可查看转人工队列。</div>`;
+    return;
+  }
+  if (!adminState.assistantEscalations.length) {
+    host.innerHTML = `<div class="empty-state">当前没有等待人工接管的会话。</div>`;
+    return;
+  }
+
+  host.innerHTML = adminState.assistantEscalations.map((session) => `
+    <article class="queue-card">
+      <div class="row-top">
+        <div>
+          <strong>${escapeHtml(session.displayName || session.username)}</strong>
+          <div class="inline-meta">${escapeHtml(session.username)} · ${escapeHtml(formatDateTime(session.createdAt))}</div>
+        </div>
+        <div class="tag ${assistantServiceTagClass(session.serviceStatus)}">${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</div>
+      </div>
+      <div class="queue-meta">
+        <div class="inline-meta">线程 ${escapeHtml(session.threadId)}</div>
+        <div class="inline-meta">意图 ${escapeHtml(session.lastIntent || "chat")} · 消息 ${session.messageCount} 条</div>
+      </div>
+      <div class="panel-hint">${escapeHtml(session.summary || "等待客服查看详情")}</div>
+      <div class="order-actions">
+        <button type="button" class="ghost assistant-focus-session-btn" data-assistant-session-id="${session.id}">查看会话</button>
+      </div>
+    </article>
+  `).join("");
+
+  host.querySelectorAll(".assistant-focus-session-btn").forEach((button) => {
+    button.addEventListener("click", () => runAdminAction(() => selectAssistantSession(Number(button.dataset.assistantSessionId), true)));
+  });
 }
 
 function renderAssistantDrafts() {
@@ -857,6 +949,7 @@ function clearAdminDataState() {
   adminState.users = [];
   adminState.assistantSessions = [];
   adminState.assistantMessages = [];
+  adminState.assistantEscalations = [];
   adminState.assistantDrafts = [];
   adminState.selectedAssistantSessionId = null;
   adminState.editingProductId = null;
@@ -877,13 +970,14 @@ async function loadAdminData() {
     return;
   }
 
-  const [dashboard, products, orders, knowledgeDocs, users, assistantSessions, assistantDrafts] = await Promise.all([
+  const [dashboard, products, orders, knowledgeDocs, users, assistantSessions, assistantEscalations, assistantDrafts] = await Promise.all([
     adminFetchJson("/api/admin/dashboard"),
     adminFetchJson("/api/admin/products"),
     adminFetchJson("/api/admin/orders"),
     adminFetchJson("/api/admin/knowledge/documents"),
     adminFetchJson("/api/admin/users"),
     adminFetchJson("/api/admin/assistant/sessions"),
+    adminFetchJson("/api/admin/assistant/escalations"),
     adminFetchJson("/api/admin/assistant/drafts"),
   ]);
 
@@ -893,6 +987,7 @@ async function loadAdminData() {
   adminState.knowledgeDocs = knowledgeDocs || [];
   adminState.users = users || [];
   adminState.assistantSessions = assistantSessions || [];
+  adminState.assistantEscalations = assistantEscalations || [];
   adminState.assistantDrafts = assistantDrafts || [];
 
   const sessionStillExists = adminState.assistantSessions.some((session) => session.id === adminState.selectedAssistantSessionId);
@@ -918,6 +1013,7 @@ async function loadAdminData() {
 
 async function selectAssistantSession(sessionId, scrollIntoView = false) {
   adminState.selectedAssistantSessionId = sessionId;
+  clearAssistantReplyInput();
   adminState.assistantMessages = await adminFetchJson(`/api/admin/assistant/sessions/${sessionId}/messages`);
   renderAssistantOperations();
   if (scrollIntoView) {
@@ -993,6 +1089,51 @@ function readAdminShippingCarrier(orderId) {
 
 function readAdminTrackingNo(orderId) {
   return document.querySelector(`.admin-tracking-no-input[data-order-id="${orderId}"]`)?.value?.trim() || "";
+}
+
+function readAssistantReplyContent() {
+  return adminById("adminAssistantReplyInput")?.value?.trim() || "";
+}
+
+function clearAssistantReplyInput() {
+  if (adminById("adminAssistantReplyInput")) {
+    adminById("adminAssistantReplyInput").value = "";
+  }
+}
+
+function setAssistantReplyState(disabled, placeholder) {
+  const input = adminById("adminAssistantReplyInput");
+  const replyBtn = adminById("adminAssistantReplyBtn");
+  const resolveBtn = adminById("adminAssistantResolveBtn");
+  if (!input || !replyBtn || !resolveBtn) {
+    return;
+  }
+  input.disabled = disabled;
+  replyBtn.disabled = disabled;
+  resolveBtn.disabled = disabled;
+  if (placeholder) {
+    input.placeholder = placeholder;
+  }
+  if (disabled) {
+    input.value = "";
+  }
+}
+
+async function replyAssistantSession(resolve = false) {
+  if (!adminState.selectedAssistantSessionId) {
+    throw new Error("请先选择要回复的 AI 会话");
+  }
+  const content = readAssistantReplyContent();
+  if (!content) {
+    throw new Error("请输入人工回复内容");
+  }
+  await adminFetchJson(`/api/admin/assistant/sessions/${adminState.selectedAssistantSessionId}/reply`, {
+    method: "POST",
+    body: JSON.stringify({ content, resolve }),
+  });
+  clearAssistantReplyInput();
+  await loadAdminData();
+  setAdminStatus(resolve ? "人工客服回复已发送，并已将当前会话结案" : "人工客服回复已发送到客户端会话");
 }
 
 async function updateOrderStatus(orderId, explicitStatus = null, explicitNote = null, explicitCarrier = null, explicitTrackingNo = null) {
@@ -1118,6 +1259,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   adminById("refreshDashboardBtn").addEventListener("click", () => runAdminAction(loadAdminData));
   adminById("refreshAssistantOpsBtn").addEventListener("click", () => runAdminAction(loadAdminData));
+  adminById("adminAssistantReplyBtn").addEventListener("click", () => runAdminAction(() => replyAssistantSession(false)));
+  adminById("adminAssistantResolveBtn").addEventListener("click", () => runAdminAction(() => replyAssistantSession(true)));
   adminById("productForm").addEventListener("submit", (event) => runAdminAction(() => saveProduct(event)));
   adminById("resetProductBtn").addEventListener("click", resetProductForm);
   adminById("adminOrderSearchBtn").addEventListener("click", () => runAdminAction(async () => applyOrderSearch()));

@@ -61,6 +61,7 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
         }
 
         ensureOrderStatusConstraint();
+        ensureAssistantSessionServiceStatus();
 
         log.info("Checked PostgreSQL audit columns for {} tables", checkedTables);
     }
@@ -107,5 +108,15 @@ public class LegacyPostgresSchemaMigrator implements CommandLineRunner, Ordered 
                     'CANCELLED'
                 ))
                 """);
+    }
+
+    private void ensureAssistantSessionServiceStatus() {
+        if (!tableExists("assistant_sessions")) {
+            return;
+        }
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ADD COLUMN IF NOT EXISTS service_status VARCHAR(32)");
+        jdbcTemplate.update(
+                "UPDATE assistant_sessions SET service_status = COALESCE(NULLIF(TRIM(service_status), ''), 'ACTIVE') WHERE service_status IS NULL OR TRIM(service_status) = ''");
+        jdbcTemplate.execute("ALTER TABLE assistant_sessions ALTER COLUMN service_status SET NOT NULL");
     }
 }

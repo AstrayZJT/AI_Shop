@@ -94,7 +94,7 @@
           <div class="section-head compact">
             <div>
               <h2>AI 客服会话</h2>
-              <p>查看最近的用户咨询、AI 回复摘要和会话意图，快速判断客服链路是否正常。</p>
+              <p>查看最近的用户咨询、AI 回复摘要、转人工状态和人工跟进结果，快速判断客服链路是否正常。</p>
             </div>
             <button id="refreshAssistantOpsBtn" type="button" class="ghost">刷新 AI 视图</button>
           </div>
@@ -103,6 +103,13 @@
             <div class="panel-section">
               <div id="adminAssistantSessionMeta" class="assistant-meta"></div>
               <div id="adminAssistantMessages" class="chat-feed admin-chat-feed"></div>
+              <div class="assistant-reply-box">
+                <textarea id="adminAssistantReplyInput" placeholder="输入人工客服回复，发送后客户端会在同一会话里看到这条消息"></textarea>
+                <div class="composer-actions">
+                  <button id="adminAssistantReplyBtn" type="button" class="primary">发送人工回复</button>
+                  <button id="adminAssistantResolveBtn" type="button" class="ghost">发送并结案</button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -110,11 +117,28 @@
         <section class="panel work-panel">
           <div class="section-head compact">
             <div>
-              <h2>AI 下单草稿</h2>
-              <p>集中查看还未确认的 AI 下单草稿，辅助判断用户咨询是否已经接近转化。</p>
+              <h2>人工接管与草稿</h2>
+              <p>优先查看等待人工跟进的会话，再结合 AI 下单草稿判断咨询是否已经接近转化。</p>
             </div>
           </div>
+          <div class="panel-section">
+            <div class="section-head compact nested-head">
+              <div>
+                <h3>人工接管队列</h3>
+                <p>会话进入转人工后会出现在这里，适合客服主管快速分派和跟进。</p>
+              </div>
+            </div>
+            <div id="adminAssistantEscalationList" class="stack-list"></div>
+          </div>
+          <div class="panel-section">
+            <div class="section-head compact nested-head">
+              <div>
+                <h3>AI 下单草稿</h3>
+                <p>集中查看还未确认的 AI 下单草稿，辅助判断用户咨询是否已经接近转化。</p>
+              </div>
+            </div>
           <div id="adminAssistantDraftList" class="stack-list"></div>
+          </div>
         </section>
       </div>
     </section>

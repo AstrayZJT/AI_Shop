@@ -434,6 +434,18 @@ textarea {
   background: rgba(15, 118, 110, 0.1);
 }
 
+.message-bubble.support {
+  max-width: 96%;
+  background: rgba(249, 115, 22, 0.12);
+}
+
+.message-role {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .assistant-meta {
   min-height: 52px;
   padding: 12px;
@@ -569,6 +581,16 @@ textarea {
 .panel-section {
   display: grid;
   gap: 12px;
+}
+
+.assistant-reply-box {
+  display: grid;
+  gap: 10px;
+}
+
+.assistant-reply-box textarea {
+  min-height: 108px;
+  background: var(--surface);
 }
 
 .nested-head {

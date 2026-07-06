@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.aishop.dto.AdminDtos.AdminOrderResponse;
 import com.aishop.dto.AdminDtos.AdminAssistantDraftResponse;
 import com.aishop.dto.AdminDtos.AdminAssistantMessageResponse;
+import com.aishop.dto.AdminDtos.AdminAssistantReplyRequest;
 import com.aishop.dto.AdminDtos.AdminAssistantSessionResponse;
 import com.aishop.dto.AdminDtos.AdminUserResponse;
 import com.aishop.dto.AdminDtos.DashboardMetricResponse;
@@ -123,10 +124,24 @@ public class AdminController {
         return adminService.listAssistantSessions();
     }
 
+    @GetMapping("/api/admin/assistant/escalations")
+    public List<AdminAssistantSessionResponse> assistantEscalations(HttpSession session) {
+        authService.requireAdmin(session);
+        return adminService.listEscalatedAssistantSessions();
+    }
+
     @GetMapping("/api/admin/assistant/sessions/{id}/messages")
     public List<AdminAssistantMessageResponse> assistantMessages(HttpSession session, @PathVariable Long id) {
         authService.requireAdmin(session);
         return adminService.assistantMessages(id);
+    }
+
+    @PostMapping("/api/admin/assistant/sessions/{id}/reply")
+    public AdminAssistantMessageResponse assistantReply(HttpSession session,
+                                                        @PathVariable Long id,
+                                                        @RequestBody AdminAssistantReplyRequest request) {
+        authService.requireAdmin(session);
+        return adminService.replyAssistantSession(id, request.content(), request.resolve());
     }
 
     @GetMapping("/api/admin/assistant/drafts")

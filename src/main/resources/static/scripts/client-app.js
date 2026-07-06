@@ -9,6 +9,7 @@ const clientState = {
   sessionId: null,
   threadId: null,
   pendingDraft: null,
+  assistantContext: null,
 };
 
 const ORDER_STATUS_LABELS = {
@@ -21,6 +22,12 @@ const ORDER_STATUS_LABELS = {
   REFUND_REQUESTED: "退款处理中",
   REFUNDED: "已退款",
   CANCELLED: "已取消",
+};
+
+const ASSISTANT_SERVICE_STATUS_LABELS = {
+  ACTIVE: "AI 在线服务中",
+  ESCALATED: "人工跟进中",
+  RESOLVED: "人工已回复",
 };
 
 function clientById(id) {
@@ -76,6 +83,31 @@ function draftStatusLabel(status) {
     return "已取消";
   }
   return status || "未知状态";
+}
+
+function assistantServiceStatusLabel(status) {
+  return ASSISTANT_SERVICE_STATUS_LABELS[status] || ASSISTANT_SERVICE_STATUS_LABELS.ACTIVE;
+}
+
+function currentAssistantSession() {
+  return clientState.sessions.find((session) => session.id === clientState.sessionId) || null;
+}
+
+function assistantRoleLabel(role) {
+  if (role === "user") {
+    return "我";
+  }
+  if (role === "support") {
+    return "人工客服";
+  }
+  return "AI 客服";
+}
+
+function formatMessageTime(value) {
+  if (!value) {
+    return "";
+  }
+  return new Date(value).toLocaleString("zh-CN");
 }
 
 function setStoreStatus(text) {
@@ -393,6 +425,7 @@ function renderSessions() {
   host.innerHTML = clientState.sessions.map((session) => `
     <button type="button" class="session-pill ${clientState.sessionId === session.id ? "active" : ""}" data-session-id="${session.id}">
       <strong>${escapeHtml(session.title)}</strong>
+      <div class="inline-meta">${escapeHtml(assistantServiceStatusLabel(session.serviceStatus))}</div>
       <div class="inline-meta">${escapeHtml(session.lastIntent || "chat")}</div>
     </button>
   `).join("");
@@ -412,24 +445,48 @@ function renderAssistantMessages(messages) {
   }
   host.innerHTML = messages.map((message) => `
     <div class="message-bubble ${message.role}">
-      ${escapeHtml(message.content).replaceAll("\n", "<br>")}
+      <div class="message-role">${escapeHtml(assistantRoleLabel(message.role))}</div>
+      <div>${escapeHtml(message.content).replaceAll("\n", "<br>")}</div>
+      <div class="inline-meta">${escapeHtml(formatMessageTime(message.createdAt))}</div>
     </div>
   `).join("");
   host.scrollTop = host.scrollHeight;
 }
 
-function renderAssistantMeta(payload) {
+function renderAssistantMeta(payload = clientState.assistantContext) {
+  clientState.assistantContext = payload;
   const host = clientById("assistantMeta");
   if (!host) {
     return;
   }
-  if (!payload) {
-    host.textContent = "这里会展示 AI 命中的知识片段、会话意图和下单草稿摘要。";
+  const session = currentAssistantSession();
+  if (!payload && !session) {
+    host.textContent = "这里会展示会话状态、AI 命中的知识片段、下单草稿摘要，以及是否已经转人工。";
     return;
   }
-  const sourceText = payload.sources?.length ? payload.sources.join(" | ") : "无知识片段";
-  const draftText = payload.pendingOrderDraft ? "已生成下单草稿" : "未生成下单草稿";
-  host.textContent = `意图：${payload.intent} | ${draftText} | 来源：${sourceText}`;
+  const status = assistantServiceStatusLabel(session?.serviceStatus);
+  const intent = payload?.intent || session?.lastIntent || "chat";
+  const sourceText = payload?.sources?.length
+    ? payload.sources.join(" | ")
+    : "本会话支持商品咨询、订单查询、知识库检索、AI 代办和人工接管。";
+  const draftText = payload?.pendingOrderDraft
+    ? "本轮已生成下单草稿"
+    : clientState.pendingDraft?.status === "PENDING_CONFIRMATION"
+      ? "当前有待确认的 AI 下单草稿"
+      : "当前没有待确认下单草稿";
+  let statusHint = "你可以继续让 AI 查询商品、订单、物流和售后规则。";
+  if (session?.serviceStatus === "ESCALATED") {
+    statusHint = "当前会话已经进入人工跟进队列，管理员在后台回复后会直接回流到这里。";
+  } else if (session?.serviceStatus === "RESOLVED") {
+    statusHint = "人工客服已经回复，你可以继续补充问题，系统会重新回到正常 AI 会话。";
+  }
+  host.innerHTML = `
+    <div><strong>会话状态：</strong>${escapeHtml(status)}</div>
+    <div><strong>当前意图：</strong>${escapeHtml(intent)}</div>
+    <div><strong>草稿状态：</strong>${escapeHtml(draftText)}</div>
+    <div><strong>提示：</strong>${escapeHtml(statusHint)}</div>
+    <div><strong>知识命中：</strong>${escapeHtml(sourceText)}</div>
+  `;
 }
 
 function renderAssistantDraft() {
@@ -521,6 +578,7 @@ async function loadSessions() {
     clientState.sessionId = null;
     clientState.threadId = null;
     clientState.pendingDraft = null;
+    clientState.assistantContext = null;
     renderSessions();
     renderAssistantMessages([]);
     renderAssistantMeta(null);
@@ -528,15 +586,23 @@ async function loadSessions() {
     return;
   }
   clientState.sessions = await clientFetchJson("/api/assistant/sessions");
+  const sessionStillExists = clientState.sessions.some((session) => session.id === clientState.sessionId);
+  if (!sessionStillExists) {
+    clientState.sessionId = null;
+    clientState.threadId = null;
+  }
   if (!clientState.sessionId && clientState.sessions.length) {
     clientState.sessionId = clientState.sessions[0].id;
     clientState.threadId = `assistant-${clientState.sessionId}`;
   }
   renderSessions();
+  renderAssistantMeta(clientState.assistantContext);
   if (clientState.sessionId) {
     await Promise.all([loadMessages(clientState.sessionId), loadPendingDraft()]);
   } else {
+    clientState.assistantContext = null;
     renderAssistantMessages([]);
+    renderAssistantMeta(null);
     clientState.pendingDraft = null;
     renderAssistantDraft();
   }
@@ -551,7 +617,14 @@ async function selectSession(sessionId) {
   const session = await clientFetchJson(`/api/assistant/sessions/${sessionId}`);
   clientState.sessionId = session.id;
   clientState.threadId = `assistant-${session.id}`;
+  clientState.assistantContext = {
+    intent: session.lastIntent,
+    serviceStatus: session.serviceStatus,
+    sources: [],
+    pendingOrderDraft: null,
+  };
   renderSessions();
+  renderAssistantMeta(clientState.assistantContext);
   await Promise.all([loadMessages(session.id), loadPendingDraft()]);
 }
 
@@ -560,6 +633,13 @@ async function createSession() {
   clientState.sessionId = session.id;
   clientState.threadId = `assistant-${session.id}`;
   clientState.pendingDraft = null;
+  clientState.assistantContext = {
+    intent: session.lastIntent,
+    serviceStatus: session.serviceStatus,
+    sources: [],
+    pendingOrderDraft: null,
+  };
+  renderAssistantMeta(clientState.assistantContext);
   renderAssistantDraft();
   await loadSessions();
 }
@@ -568,10 +648,12 @@ async function loadPendingDraft() {
   if (!clientState.user || !clientState.threadId) {
     clientState.pendingDraft = null;
     renderAssistantDraft();
+    renderAssistantMeta(clientState.assistantContext);
     return;
   }
   clientState.pendingDraft = await clientFetchJson(`/api/orders/draft/current?threadId=${encodeURIComponent(clientState.threadId)}`);
   renderAssistantDraft();
+  renderAssistantMeta(clientState.assistantContext);
 }
 
 async function login() {
@@ -610,6 +692,7 @@ async function logout() {
   clientState.sessionId = null;
   clientState.threadId = null;
   clientState.pendingDraft = null;
+  clientState.assistantContext = null;
   await bootstrapClient();
 }
 
@@ -674,9 +757,35 @@ async function sendAssistantMessage(message) {
   });
   clientState.sessionId = payload.sessionId;
   clientState.threadId = payload.threadId;
+  clientState.assistantContext = payload;
   clientById("assistantInput").value = "";
   renderAssistantMeta(payload);
   await Promise.all([loadSessions(), loadOrders()]);
+}
+
+async function requestHumanSupport() {
+  if (!clientState.user) {
+    throw new Error("请先登录再转人工");
+  }
+  if (!clientState.sessionId) {
+    await createSession();
+  }
+  const note = clientById("assistantInput").value.trim();
+  const session = await clientFetchJson(`/api/assistant/sessions/${clientState.sessionId}/escalate`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+  clientState.sessionId = session.id;
+  clientState.threadId = `assistant-${session.id}`;
+  clientState.assistantContext = {
+    intent: session.lastIntent,
+    serviceStatus: session.serviceStatus,
+    sources: [],
+    pendingOrderDraft: null,
+  };
+  clientById("assistantInput").value = "";
+  await loadSessions();
+  setStoreStatus(note ? "已转人工，并把你的补充说明一并提交给客服" : "已转人工客服，等待后台跟进");
 }
 
 async function confirmAssistantDraft() {
@@ -799,6 +908,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   clientById("checkoutBtn").addEventListener("click", () => runClientAction(checkout));
   clientById("assistantSendBtn").addEventListener("click", () => runClientAction(() => sendAssistantMessage("")));
+  clientById("assistantEscalateBtn").addEventListener("click", () => runClientAction(requestHumanSupport));
   clientById("assistantInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();

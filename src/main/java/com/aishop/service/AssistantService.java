@@ -30,6 +30,8 @@ public class AssistantService {
 
     private static final Logger log = LoggerFactory.getLogger(AssistantService.class);
     private static final String SERVICE_STATUS_ACTIVE = "ACTIVE";
+    private static final String SERVICE_STATUS_ESCALATED = "ESCALATED";
+    private static final String SERVICE_STATUS_RESOLVED = "RESOLVED";
     private static final Pattern ORDER_NO_PATTERN = Pattern.compile("ORD-[A-Z0-9]{8}");
     private static final Pattern PURCHASE_QUANTITY_PATTERN = Pattern.compile("(?:买|购买|下单|来|要|购入)\\D{0,4}(\\d{1,2}|一|二|两|三|四|五|六|七|八|九|十)\\s*(?:个|件|台|部|副|双|盒)?");
     private static final Pattern ADDRESS_UPDATE_PATTERN = Pattern.compile("(?:改成|改为|修改为|修改成|更新为|更新成|收货地址为|地址为)(?<address>.+)$");
@@ -65,8 +67,9 @@ public class AssistantService {
 
     public AssistantSession getOrCreateSession(AppUser user, Long sessionId) {
         if (sessionId != null) {
-            return sessionRepository.findByIdAndUser(sessionId, user)
+            var session = sessionRepository.findByIdAndUser(sessionId, user)
                     .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+            return normalizeServiceStatus(session);
         }
         var session = new AssistantSession();
         session.setUser(user);
@@ -82,12 +85,40 @@ public class AssistantService {
     }
 
     @Transactional
+    public AssistantSession escalateSession(AppUser user, Long sessionId, String note) {
+        if (user == null) {
+            throw new IllegalArgumentException("请先登录");
+        }
+        AssistantSession session = getOrCreateSession(user, sessionId);
+        boolean alreadyEscalated = SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()));
+        String normalizedNote = blankToNull(note);
+        if (normalizedNote != null) {
+            saveMessage(session, "user", "申请人工客服：" + normalizedNote);
+        }
+
+        markSessionEscalated(session);
+        String answer = alreadyEscalated
+                ? "你的会话已经在人工跟进中，我把你刚补充的说明也同步给人工客服了。"
+                : "我已经帮你转接人工客服，接下来管理员可以在后台直接回复你。";
+        session.setSummary(composeSummary(
+                session.getSummary(),
+                normalizedNote == null ? "申请人工客服" : "申请人工客服：" + normalizedNote,
+                answer));
+        sessionRepository.save(session);
+        saveMessage(session, "assistant", answer);
+        return session;
+    }
+
+    @Transactional
     public ChatResponse chat(AppUser user, Long sessionId, String message, String threadId) {
         if (user == null) {
             throw new IllegalArgumentException("请先登录");
         }
 
         var session = getOrCreateSession(user, sessionId);
+        if (SERVICE_STATUS_RESOLVED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
+            session.setServiceStatus(SERVICE_STATUS_ACTIVE);
+        }
         var currentThreadId = threadId == null || threadId.isBlank() ? "assistant-" + session.getId() : threadId;
         log.info("assistant request: user={}, sessionId={}, threadId={}, message={}",
                 user.getUsername(), session.getId(), currentThreadId, preview(message));
@@ -114,15 +145,15 @@ public class AssistantService {
         log.info("assistant context: sessionId={}, intent={}, sourceCount={}",
                 session.getId(), intent, sources.size());
 
-        var actionExecution = executeDirectAction(user, message, allOrders, exactOrder);
+        var actionExecution = executeDirectAction(session, user, message, allOrders, exactOrder);
         if (actionExecution != null) {
             intent = actionExecution.intent();
         }
 
         var answer = actionExecution == null
-                ? buildAnswer(user, intent, sources, matchedProducts, recentOrders, exactOrder, message, currentThreadId)
+                ? buildPendingHandoffAnswer(session, user, intent, sources, matchedProducts, recentOrders, exactOrder, message, currentThreadId)
                 : actionExecution.answer();
-        var draftJson = actionExecution == null
+        var draftJson = actionExecution == null && !SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))
                 ? buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts, requestedQuantity)
                 : null;
         log.info("assistant response: sessionId={}, intent={}, draftCreated={}, answer={}",
@@ -145,6 +176,37 @@ public class AssistantService {
         var session = sessionRepository.findByIdAndUser(sessionId, user)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
         return messageRepository.findBySessionOrderByCreatedAtAsc(session);
+    }
+
+    private AssistantSession normalizeServiceStatus(AssistantSession session) {
+        String normalized = normalizeServiceStatus(session.getServiceStatus());
+        if (!normalized.equals(session.getServiceStatus())) {
+            session.setServiceStatus(normalized);
+            return sessionRepository.save(session);
+        }
+        return session;
+    }
+
+    private String normalizeServiceStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return SERVICE_STATUS_ACTIVE;
+        }
+        return status.trim().toUpperCase();
+    }
+
+    private String buildPendingHandoffAnswer(AssistantSession session,
+                                             AppUser user,
+                                             String intent,
+                                             List<String> sources,
+                                             List<ProductResponse> matchedProducts,
+                                             List<OrderResponse> recentOrders,
+                                             OrderResponse exactOrder,
+                                             String message,
+                                             String threadId) {
+        if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
+            return "你的会话已经转给人工客服，我会把这条补充信息同步给人工同事，请稍候查看人工回复。";
+        }
+        return buildAnswer(user, intent, sources, matchedProducts, recentOrders, exactOrder, message, threadId);
     }
 
     private String buildAnswer(AppUser user,
@@ -228,12 +290,20 @@ public class AssistantService {
         }
     }
 
-    private ActionExecution executeDirectAction(AppUser user,
+    private ActionExecution executeDirectAction(AssistantSession session,
+                                                AppUser user,
                                                 String message,
                                                 List<OrderResponse> allOrders,
                                                 OrderResponse exactOrder) {
         if (message == null || message.isBlank()) {
             return null;
+        }
+        if (isHumanSupportIntent(message)) {
+            if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
+                return new ActionExecution("你的会话已经在人工跟进中，我会把这条消息继续同步给人工客服。", "handoff");
+            }
+            markSessionEscalated(session);
+            return new ActionExecution("我已经帮你转接人工客服，管理员接下来可以在后台直接回复你。", "handoff");
         }
         if (isCancelIntent(message) && wantsDirectExecution(message)) {
             if (exactOrder != null) {
@@ -359,6 +429,11 @@ public class AssistantService {
         return base + "U:" + trim(userMessage, 80) + " A:" + trim(answer, 80);
     }
 
+    private void markSessionEscalated(AssistantSession session) {
+        session.setServiceStatus(SERVICE_STATUS_ESCALATED);
+        session.setLastIntent("handoff");
+    }
+
     private String trim(String text, int maxLen) {
         if (text == null) {
             return "";
@@ -381,8 +456,18 @@ public class AssistantService {
         messageRepository.save(msg);
     }
 
+    private String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
     private String detectIntent(String message) {
         var text = message == null ? "" : message.toLowerCase();
+        if (isHumanSupportIntent(message)) {
+            return "handoff";
+        }
         if (text.contains("退款") || text.contains("退货") || text.contains("售后") || text.contains("保修")) {
             return "after_sales";
         }
@@ -446,6 +531,21 @@ public class AssistantService {
     private boolean isKnowledgePolicyIntent(String message) {
         String text = message == null ? "" : message.toLowerCase();
         return text.contains("规则") || text.contains("政策") || text.contains("说明") || text.contains("faq");
+    }
+
+    private boolean isHumanSupportIntent(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        boolean mentionsHumanSupport = text.contains("转人工")
+                || text.contains("转接人工")
+                || text.contains("人工客服")
+                || text.contains("人工处理")
+                || text.contains("人工跟进")
+                || text.contains("真人客服")
+                || text.contains("人工服务")
+                || text.contains("联系客服")
+                || text.contains("客服介入");
+        boolean asksHow = text.contains("怎么") || text.contains("如何");
+        return mentionsHumanSupport && !asksHow;
     }
 
     private boolean wantsDirectExecution(String message) {

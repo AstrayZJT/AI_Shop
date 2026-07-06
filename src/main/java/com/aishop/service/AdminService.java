@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.aishop.domain.AppUser;
+import com.aishop.domain.AssistantMessage;
 import com.aishop.domain.AssistantSession;
 import com.aishop.domain.KnowledgeDocument;
 import com.aishop.domain.OrderStatus;
@@ -38,6 +39,9 @@ import com.aishop.repository.ShopOrderRepository;
 @Service
 public class AdminService {
 
+    private static final String SERVICE_STATUS_ACTIVE = "ACTIVE";
+    private static final String SERVICE_STATUS_ESCALATED = "ESCALATED";
+    private static final String SERVICE_STATUS_RESOLVED = "RESOLVED";
     private static final Pattern DRAFT_PATTERN = Pattern.compile(
             "\\\"productId\\\":(?<productId>\\d+),\\\"productName\\\":\\\"(?<productName>.*?)\\\",\\\"quantity\\\":(?<quantity>\\d+),\\\"unitPrice\\\":(?<unitPrice>[-\\d.]+),\\\"totalAmount\\\":(?<totalAmount>[-\\d.]+),\\\"note\\\":\\\"(?<note>.*?)\\\""
     );
@@ -188,6 +192,13 @@ public class AdminService {
     }
 
     @Transactional(readOnly = true)
+    public List<AdminAssistantSessionResponse> listEscalatedAssistantSessions() {
+        return assistantSessionRepository.findTop20ByServiceStatusOrderByCreatedAtDesc(SERVICE_STATUS_ESCALATED).stream()
+                .map(this::toAdminAssistantSessionResponse)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public List<AdminAssistantMessageResponse> assistantMessages(Long sessionId) {
         AssistantSession session = assistantSessionRepository.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("AI 会话不存在"));
@@ -204,6 +215,29 @@ public class AdminService {
         return pendingOrderDraftRepository.findTop20ByStatusOrderByCreatedAtDesc("PENDING_CONFIRMATION").stream()
                 .map(this::toAdminAssistantDraftResponse)
                 .toList();
+    }
+
+    @Transactional
+    public AdminAssistantMessageResponse replyAssistantSession(Long sessionId, String content, Boolean resolve) {
+        AssistantSession session = assistantSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("AI 会话不存在"));
+        String normalizedContent = blankToNull(content);
+        if (normalizedContent == null) {
+            throw new IllegalArgumentException("人工回复内容不能为空");
+        }
+
+        AssistantMessage message = new AssistantMessage();
+        message.setSession(session);
+        message.setRole("support");
+        message.setContent(normalizedContent);
+        AssistantMessage saved = assistantMessageRepository.save(message);
+
+        session.setServiceStatus(Boolean.TRUE.equals(resolve) ? SERVICE_STATUS_RESOLVED : SERVICE_STATUS_ESCALATED);
+        session.setLastIntent("handoff");
+        session.setSummary(appendAssistantSummary(session.getSummary(), "人工客服", normalizedContent));
+        assistantSessionRepository.save(session);
+
+        return new AdminAssistantMessageResponse(saved.getRole(), saved.getContent(), saved.getCreatedAt());
     }
 
     private void ensureUniqueSku(String sku, Long currentId) {
@@ -292,7 +326,7 @@ public class AdminService {
                 session.getTitle(),
                 session.getSummary(),
                 session.getLastIntent(),
-                session.getServiceStatus(),
+                normalizeServiceStatus(session.getServiceStatus()),
                 user.getUsername(),
                 user.getDisplayName(),
                 assistantMessageRepository.countBySession(session),
@@ -356,6 +390,14 @@ public class AdminService {
         return current + " | " + suffix;
     }
 
+    private String appendAssistantSummary(String current, String speaker, String content) {
+        String snippet = (speaker == null ? "" : speaker + "：") + trim(content, 80);
+        if (current == null || current.isBlank()) {
+            return snippet;
+        }
+        return current + " | " + snippet;
+    }
+
     private DraftPayload parseDraft(String draftJson) {
         var matcher = DRAFT_PATTERN.matcher(draftJson == null ? "" : draftJson);
         if (!matcher.find()) {
@@ -386,6 +428,20 @@ public class AdminService {
             return null;
         }
         return value.trim();
+    }
+
+    private String normalizeServiceStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return SERVICE_STATUS_ACTIVE;
+        }
+        return status.trim().toUpperCase();
+    }
+
+    private String trim(String value, int maxLen) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() <= maxLen ? value : value.substring(0, maxLen);
     }
 
     private void restoreStockForOrder(ShopOrder order) {
