@@ -848,6 +848,8 @@ mvn -q -DskipTests compile
 - 管理端前端逻辑：`src/main/resources/static/scripts/admin-app.js`
 - 前后台共享样式：`src/main/resources/static/styles/portal.css`
 - 独立前端工程：`frontend/`
+- 详细设计说明：`docs/项目详细设计说明.md`
+- 开发日志：`docs/开发日志.md`
 
 ## 15. 当前边界与未完成项
 
