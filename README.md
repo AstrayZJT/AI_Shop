@@ -850,6 +850,7 @@ mvn -q -DskipTests compile
 - 独立前端工程：`frontend/`
 - 详细设计说明：`docs/项目详细设计说明.md`
 - 开发日志：`docs/开发日志.md`
+- AI 功能面试教程：`docs/AI功能面试教程.md`
 
 ## 15. 当前边界与未完成项
 
