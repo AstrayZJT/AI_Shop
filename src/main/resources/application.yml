@@ -41,6 +41,12 @@ agent:
 
 rag:
   knowledge-path: knowledge
+  chunk-size: ${RAG_CHUNK_SIZE:500}
+  chunk-overlap: ${RAG_CHUNK_OVERLAP:80}
+  candidate-multiplier: ${RAG_CANDIDATE_MULTIPLIER:4}
+  min-vector-score: ${RAG_MIN_VECTOR_SCORE:0.78}
+  min-final-score: ${RAG_MIN_FINAL_SCORE:0.62}
+  max-context-characters: ${RAG_MAX_CONTEXT_CHARACTERS:6000}
   pgvector:
     host: ${RAG_PGVECTOR_HOST:${DB_HOST:localhost}}
     port: ${RAG_PGVECTOR_PORT:${DB_PORT:5432}}

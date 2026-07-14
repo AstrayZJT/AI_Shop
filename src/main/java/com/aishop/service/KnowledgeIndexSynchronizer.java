@@ -88,6 +88,18 @@ public class KnowledgeIndexSynchronizer implements CommandLineRunner {
                 .put("document_id", chunk.getDocument().getId())
                 .put("title", chunk.getDocument().getTitle())
                 .put("doc_type", chunk.getDocument().getDocType());
+        if (chunk.getChunkIndex() != null) {
+            metadata.put("chunk_index", chunk.getChunkIndex());
+        }
+        if (chunk.getStartOffset() != null) {
+            metadata.put("start_offset", chunk.getStartOffset());
+        }
+        if (chunk.getEndOffset() != null) {
+            metadata.put("end_offset", chunk.getEndOffset());
+        }
+        if (chunk.getContentHash() != null && !chunk.getContentHash().isBlank()) {
+            metadata.put("content_hash", chunk.getContentHash());
+        }
         return TextSegment.from(chunk.getChunkText(), metadata);
     }
 

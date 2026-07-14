@@ -10,19 +10,25 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.aishop.dto.KnowledgeDtos.ImportRequest;
 import com.aishop.dto.KnowledgeDtos.SearchResponse;
+import com.aishop.service.AuthService;
 import com.aishop.service.KnowledgeService;
+
+import jakarta.servlet.http.HttpSession;
 
 @RestController
 public class KnowledgeController {
 
     private final KnowledgeService knowledgeService;
+    private final AuthService authService;
 
-    public KnowledgeController(KnowledgeService knowledgeService) {
+    public KnowledgeController(KnowledgeService knowledgeService, AuthService authService) {
         this.knowledgeService = knowledgeService;
+        this.authService = authService;
     }
 
     @PostMapping("/api/knowledge/import")
-    public Object importDoc(@RequestBody ImportRequest request) {
+    public Object importDoc(HttpSession session, @RequestBody ImportRequest request) {
+        authService.requireAdmin(session);
         return knowledgeService.importDocument(request);
     }
 

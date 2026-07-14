@@ -67,18 +67,29 @@ public class SearchKnowledgeTool implements AssistantTool {
     @Override
     public ToolExecutionOutcome execute(ToolContext context, PreparedToolCall call) {
         String query = (String) call.arguments().get("query");
-        List<KnowledgeSource> sources = knowledgeService.search(query).stream()
+        var retrieval = knowledgeService.retrieve(query);
+        List<KnowledgeSource> sources = retrieval.hits().stream()
                 .limit(5)
                 .map(hit -> new KnowledgeSource(
                         hit.id(),
                         hit.documentId(),
                         hit.title(),
+                        hit.docType(),
+                        hit.chunkIndex(),
+                        hit.startOffset(),
+                        hit.endOffset(),
                         hit.chunkText(),
                         hit.matchMode(),
-                        hit.score()))
+                        hit.score(),
+                        hit.keywordScore(),
+                        hit.vectorScore()))
                 .toList();
         return new ToolExecutionOutcome(
-                Map.of("sources", sources, "count", sources.size()),
+                Map.of(
+                        "sources", sources,
+                        "count", sources.size(),
+                        "contextChunkIds", retrieval.contextChunkIds(),
+                        "contextTruncated", retrieval.contextTruncated()),
                 sources.isEmpty() ? "知识库没有可靠命中" : "知识库命中 " + sources.size() + " 条内容");
     }
 
@@ -86,9 +97,15 @@ public class SearchKnowledgeTool implements AssistantTool {
             Long chunkId,
             Long documentId,
             String title,
+            String docType,
+            Integer chunkIndex,
+            Integer startOffset,
+            Integer endOffset,
             String text,
             String matchMode,
-            Double score
+            Double score,
+            Double keywordScore,
+            Double vectorScore
     ) {
     }
 }

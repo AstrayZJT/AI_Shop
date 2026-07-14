@@ -183,6 +183,22 @@ public class DataInitializer {
                     2. 当用户询问通勤、降噪、轻办公、居家生活等场景时，应优先结合对应商品特点进行推荐。
                     3. 当知识库命中售后或物流规则时，应先引用规则，再结合用户订单状态给出处理建议。
                     """);
+            seedKnowledgeDocument(knowledgeDocumentRepository, knowledgeService,
+                    "七天无理由退货规则",
+                    "policy",
+                    """
+                    1. 符合条件的商品支持自签收次日起 7 个自然日内申请七天无理由退货。
+                    2. 商品应保持完好，配件、赠品、包装和防伪标识齐全，不影响二次销售；退回前需要在订单售后入口提交申请。
+                    3. 定制商品、已激活或影响二次销售的数码商品不适用七天无理由退货。质量问题按照售后政策另行处理。
+                    """);
+            seedKnowledgeDocument(knowledgeDocumentRepository, knowledgeService,
+                    "发票与保修规则",
+                    "policy",
+                    """
+                    1. 用户可以在订单详情提交电子发票申请，填写发票抬头、税号和接收邮箱；平台审核后发送电子发票。
+                    2. 普通商品保修期限和范围以商品详情及厂商政策为准。申请保修时需要提供订单信息和故障描述。
+                    3. 人为损坏、非授权拆修等情况不属于免费保修范围，具体结论以售后检测结果为准。
+                    """);
 
             promotionService.seedPromotion(
                     "COMMUTE50",

@@ -13,5 +13,11 @@ public final class KnowledgeDtos {
                                  Double score,
                                  String matchedTerms,
                                  boolean indexed,
-                                 int embeddingDimensions) {}
+                                 int embeddingDimensions,
+                                 String docType,
+                                 Integer chunkIndex,
+                                 Integer startOffset,
+                                 Integer endOffset,
+                                 Double keywordScore,
+                                 Double vectorScore) {}
 }

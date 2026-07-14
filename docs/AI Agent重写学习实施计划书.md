@@ -8,12 +8,16 @@
 
 本轮第二阶段 Tool Calling 与工具注册表也已完成：实现统一 Tool 抽象、ToolPolicy、AssistantToolRegistry、四个只读业务工具、取消订单无副作用 prepare 工具、计划任务 Orchestrator，以及基于 LangChain4j `ToolSpecification` / `ToolExecutionRequest` 的原生 Function Calling 实验。完整测试共 66 条，并通过真实模型、PostgreSQL 和 pgvector 验收；验收前后订单状态不变。
 
+本轮第三阶段 RAG 链路已完成：实现原文与规范化文本保存、可配置 overlap 切块、chunk 偏移和哈希、批量 Embedding、pgvector Metadata、关键词与向量融合、阈值/去重/TopK/上下文限制、严格 JSON AnswerComposer、citation 白名单、Prompt Injection 边界和 Hit@K/MRR 评测。完整测试共 88 条；真实环境固定 5 个问题均在第一位命中，`Hit@K=1.0`、`MRR=1.0`。
+
 详细结果参见：
 
 - `docs/AI Agent第一阶段学习总结.md`
 - `docs/AI Agent第一阶段真实环境验收报告.md`
 - `docs/AI Agent第二阶段学习总结.md`
 - `docs/AI Agent第二阶段真实环境验收报告.md`
+- `docs/AI Agent第三阶段RAG学习总结.md`
+- `docs/AI Agent第三阶段RAG真实环境验收报告.md`
 
 当前尚未实现 PendingAction 持久化、确认后恢复和真实取消订单，也尚未把新 Agent 链路接入正式 `/api/assistant/chat`。
 
@@ -307,6 +311,8 @@ public interface AssistantTool {
 
 ### 5.4 阶段四：重写 RAG 链路
 
+> 状态：已于 2026-07-14 完成，对应本轮 Goal 的“第三阶段”。
+
 #### 要做的事情
 
 1. 保留并整理现有知识文档导入功能。
@@ -331,6 +337,8 @@ public interface AssistantTool {
 - 能从文档原文定位到 chunk、向量记录和最终引用。
 - “七天无理由”类问题能命中正确规则。
 - 没有可靠知识命中时明确说明不确定，不编造政策。
+- 真实 pgvector 环境 5 条固定评测全部在第一位命中，Hit@K 和 MRR 均为 1.0。
+- 未知问题在模型调用前返回 `NO_EVIDENCE`，模型引用上下文外 chunk 时由 Java 拒绝。
 
 ### 5.5 阶段五：实现上下文、记忆和回答合成
 

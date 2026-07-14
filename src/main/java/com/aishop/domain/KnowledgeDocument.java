@@ -19,6 +19,13 @@ public class KnowledgeDocument extends BaseEntity {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
+    @Lob
+    @Column(columnDefinition = "TEXT")
+    private String normalizedContent;
+
+    @Column(length = 64)
+    private String contentHash;
+
     public String getTitle() {
         return title;
     }
@@ -41,5 +48,21 @@ public class KnowledgeDocument extends BaseEntity {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getNormalizedContent() {
+        return normalizedContent;
+    }
+
+    public void setNormalizedContent(String normalizedContent) {
+        this.normalizedContent = normalizedContent;
+    }
+
+    public String getContentHash() {
+        return contentHash;
+    }
+
+    public void setContentHash(String contentHash) {
+        this.contentHash = contentHash;
     }
 }

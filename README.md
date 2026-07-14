@@ -14,6 +14,7 @@
 
 - 第一阶段：真实 LLM 结构化 Planner、规则降级、计划校验和语义安全检查。
 - 第二阶段：LangChain4j Function Calling、Tool Registry、四个只读 Tool、取消订单无副作用 prepare，以及多任务工具编排。
+- 第三阶段：可配置切块、pgvector、关键词与向量混合召回、严格 JSON AnswerComposer、citation 校验和 RAG 离线评测。
 
 第二阶段提供三个登录后调试接口：
 
@@ -25,7 +26,9 @@ POST /api/assistant/tools/function-call-preview
 
 当前模型可以选择商品、订单、物流和知识库查询工具；Java 后端负责工具白名单、参数校验、用户归属和风险策略。取消订单工具只返回 `PREPARED`，不会修改订单，后续阶段再实现 PendingAction 二次确认和跨请求恢复。
 
-完整测试目前为 66 条。学习链路参见 `docs/AI Agent第二阶段学习总结.md`，真实环境结果参见 `docs/AI Agent第二阶段真实环境验收报告.md`。
+第三阶段真实环境的 5 条固定检索评测均排在第一位，Hit@K 和 MRR 均为 1.0。详细链路参见 `docs/AI Agent第三阶段RAG学习总结.md`。
+
+当前完整自动化测试为 88 条。
 
 ## 1. 当前架构
 
@@ -603,7 +606,9 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 切块逻辑在：
 
-- `src/main/java/com/aishop/service/KnowledgeService.java`
+- `src/main/java/com/aishop/service/KnowledgeTextProcessor.java`
+
+每个 chunk 还保存 `chunk_index`、`start_offset`、`end_offset` 和 `content_hash`，可从最终引用定位到规范化原文位置。默认 chunkSize 为 500、overlap 为 80。
 
 ### 9.3 向量信息放在哪里
 
@@ -634,6 +639,7 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 索引状态：显示该 chunk 是否已经生成 embedding 并进入当前检索索引
 - 原文定位：点击“定位原文片段”可以跳到对应知识文档和具体 chunk
 - 向量缓存：文档详情里可以看到 chunk 的 embedding 维度和缓存预览
+- 分路分数：调试接口同时返回 keywordScore、vectorScore 和融合后的 finalScore
 
 这块对应的 API 是：
 
@@ -660,6 +666,17 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 
 - `SHOP_AI_ENABLED=false`：只有“本地 embedding + 内存向量检索”，不是生产级 RAG
 - `SHOP_AI_ENABLED=true` 且向量数据源为 PostgreSQL：才是“真实远程 embedding + pgvector 检索”
+
+### 9.7 新 RAG 调试与评测接口
+
+```text
+POST /api/assistant/rag/preview
+GET  /api/assistant/rag/evaluation
+```
+
+预览接口执行完整 Retrieval、Augmentation、Generation 和 Citation 校验。模型必须返回严格 JSON，并且引用的 chunkId 必须属于本次上下文；无可靠命中时直接返回 `NO_EVIDENCE`，不会让模型编造平台政策。
+
+评测接口只运行 Retrieval，不调用聊天模型，返回固定问题集的 Hit@K 和 MRR。
 
 ## 10. 用户信息、会话、订单分别存在哪
 
@@ -878,6 +895,8 @@ mvn -q -DskipTests compile
 - AI Agent 第一阶段真实环境验收报告：`docs/AI Agent第一阶段真实环境验收报告.md`
 - AI Agent 第二阶段学习总结：`docs/AI Agent第二阶段学习总结.md`
 - AI Agent 第二阶段真实环境验收报告：`docs/AI Agent第二阶段真实环境验收报告.md`
+- AI Agent 第三阶段 RAG 学习总结：`docs/AI Agent第三阶段RAG学习总结.md`
+- AI Agent 第三阶段 RAG 真实环境验收报告：`docs/AI Agent第三阶段RAG真实环境验收报告.md`
 
 ## 15. 当前边界与未完成项
 
@@ -895,7 +914,7 @@ mvn -q -DskipTests compile
 
 - 没有接真实模型或没有连 PostgreSQL + pgvector 时，向量检索会退化到本地 embedding + 内存向量存储
 - 即便在本地联调模式下，知识库原文、切块文本和 embedding 缓存仍然会落业务表，方便把导入、检索、管理端查看这些流程跑通
-- 当前版本更偏“可运行演示版 RAG”，不是追求大规模知识库、复杂召回评估、混合检索和线上检索稳定性的版本
+- 当前已实现小规模混合检索、阈值控制和固定离线评测，但仍不是大规模知识库、Cross-Encoder 重排或生产级搜索稳定性方案
 
 ### 15.3 交易与履约边界
 
