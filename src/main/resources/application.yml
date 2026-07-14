@@ -58,6 +58,10 @@ shop:
     embedding-model-name: text-embedding-v4
     log-requests: true
     log-responses: true
+    timeout: ${SHOP_AI_TIMEOUT:30s}
+    max-retries: ${SHOP_AI_MAX_RETRIES:1}
+    planner-max-output-tokens: ${SHOP_AI_PLANNER_MAX_OUTPUT_TOKENS:1800}
+    planner-temperature: ${SHOP_AI_PLANNER_TEMPERATURE:0.0}
   rag:
     top-k: ${AGENT_SEARCH_MAX_RESULTS:5}
 

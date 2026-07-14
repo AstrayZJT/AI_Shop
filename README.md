@@ -851,6 +851,12 @@ mvn -q -DskipTests compile
 - 详细设计说明：`docs/项目详细设计说明.md`
 - 开发日志：`docs/开发日志.md`
 - AI 功能面试教程：`docs/AI功能面试教程.md`
+- AI 功能全链路说明：`docs/AI功能全链路说明.md`
+- AI 客服全链路源码讲解：`docs/AI客服全链路源码讲解.md`
+- AI 客服多步骤任务编排设计书：`docs/AI客服多步骤任务编排设计书.md`
+- AI Agent 重写学习实施计划书：`docs/AI Agent重写学习实施计划书.md`
+- AI Agent 第一阶段学习总结：`docs/AI Agent第一阶段学习总结.md`
+- AI Agent 第一阶段真实环境验收报告：`docs/AI Agent第一阶段真实环境验收报告.md`
 
 ## 15. 当前边界与未完成项
 

@@ -20,6 +20,8 @@ public class AiModelConfig {
                 .baseUrl(ai.baseUrl())
                 .apiKey(ai.apiKey())
                 .modelName(ai.modelName())
+                .timeout(ai.timeout())
+                .maxRetries(ai.maxRetries())
                 .logRequests(ai.logRequests())
                 .logResponses(ai.logResponses())
                 .build();
@@ -33,6 +35,8 @@ public class AiModelConfig {
                 .baseUrl(ai.baseUrl())
                 .apiKey(ai.apiKey())
                 .modelName(ai.embeddingModelName())
+                .timeout(ai.timeout())
+                .maxRetries(ai.maxRetries())
                 .logRequests(ai.logRequests())
                 .logResponses(ai.logResponses())
                 .build();

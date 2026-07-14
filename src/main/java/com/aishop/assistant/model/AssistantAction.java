@@ -1,0 +1,19 @@
+package com.aishop.assistant.model;
+
+public enum AssistantAction {
+    QUERY_ORDER,
+    QUERY_LOGISTICS,
+    SEARCH_PRODUCT,
+    SEARCH_KNOWLEDGE,
+    CHECK_PROMOTION,
+    CREATE_ORDER_DRAFT,
+    CANCEL_ORDER,
+    PAY_ORDER,
+    REQUEST_REFUND,
+    CONFIRM_RECEIPT,
+    UPDATE_ADDRESS,
+    HANDOFF,
+    ASK_CLARIFICATION,
+    GENERAL_CHAT,
+    COMPOSE_ANSWER
+}
