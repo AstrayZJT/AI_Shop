@@ -4,7 +4,18 @@
 
 ## 当前进度
 
-第一轮结构化 Planner 已于 2026-07-14 完成并通过真实环境验收：实现 LangChain4j Model Gateway、Planner Prompt、LLM/规则双 Planner、PlanValidator、PlanSemanticGuard、只读预览接口和 41 条自动化测试。当前尚未接入业务 Tool，也不会修改订单状态。详细结果参见 `docs/AI Agent第一阶段学习总结.md` 和 `docs/AI Agent第一阶段真实环境验收报告.md`。
+第一轮结构化 Planner 已于 2026-07-14 完成并通过真实环境验收：实现 LangChain4j Model Gateway、Planner Prompt、LLM/规则双 Planner、PlanValidator、PlanSemanticGuard 和只读预览接口。
+
+本轮第二阶段 Tool Calling 与工具注册表也已完成：实现统一 Tool 抽象、ToolPolicy、AssistantToolRegistry、四个只读业务工具、取消订单无副作用 prepare 工具、计划任务 Orchestrator，以及基于 LangChain4j `ToolSpecification` / `ToolExecutionRequest` 的原生 Function Calling 实验。完整测试共 66 条，并通过真实模型、PostgreSQL 和 pgvector 验收；验收前后订单状态不变。
+
+详细结果参见：
+
+- `docs/AI Agent第一阶段学习总结.md`
+- `docs/AI Agent第一阶段真实环境验收报告.md`
+- `docs/AI Agent第二阶段学习总结.md`
+- `docs/AI Agent第二阶段真实环境验收报告.md`
+
+当前尚未实现 PendingAction 持久化、确认后恢复和真实取消订单，也尚未把新 Agent 链路接入正式 `/api/assistant/chat`。
 
 ## 1. 项目重新定位
 
@@ -252,6 +263,8 @@ Java 后端职责：
 
 ### 5.3 阶段三：实现 Tool Calling 和工具注册表
 
+> 状态：已于 2026-07-14 完成，对应本轮 Goal 的“第二阶段”。
+
 #### 要做的事情
 
 1. 定义统一工具接口：
@@ -288,6 +301,9 @@ public interface AssistantTool {
 - 非白名单工具不能执行。
 - Tool 参数会经过后端 DTO 和业务规则校验。
 - 模型无法直接取消订单。
+- 已实现 `GET /api/assistant/tools`、`POST /api/assistant/tools/plan-preview` 和 `POST /api/assistant/tools/function-call-preview`。
+- 真实模型成功选择并执行订单、商品、知识库查询工具，取消订单只返回 `PREPARED`。
+- 完整自动化测试 66 条全部通过，真实验收前后订单状态一致。
 
 ### 5.4 阶段四：重写 RAG 链路
 

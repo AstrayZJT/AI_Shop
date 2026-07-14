@@ -8,6 +8,25 @@
 - 管理端：商品管理、营销活动管理、订单履约、售后工作台、退款审核、知识库导入、客户 360 画像、AI 会话接管
 - AI 客服：商品推荐、订单查询、订单动作代办、优惠活动问答、RAG 检索、人工转接、后台人工回复回流
 
+## AI Agent 重写进度
+
+面向 Agent 学习和面试讲解的新链路已完成两个阶段：
+
+- 第一阶段：真实 LLM 结构化 Planner、规则降级、计划校验和语义安全检查。
+- 第二阶段：LangChain4j Function Calling、Tool Registry、四个只读 Tool、取消订单无副作用 prepare，以及多任务工具编排。
+
+第二阶段提供三个登录后调试接口：
+
+```text
+GET  /api/assistant/tools
+POST /api/assistant/tools/plan-preview
+POST /api/assistant/tools/function-call-preview
+```
+
+当前模型可以选择商品、订单、物流和知识库查询工具；Java 后端负责工具白名单、参数校验、用户归属和风险策略。取消订单工具只返回 `PREPARED`，不会修改订单，后续阶段再实现 PendingAction 二次确认和跨请求恢复。
+
+完整测试目前为 66 条。学习链路参见 `docs/AI Agent第二阶段学习总结.md`，真实环境结果参见 `docs/AI Agent第二阶段真实环境验收报告.md`。
+
 ## 1. 当前架构
 
 这个项目现在的形态是：
@@ -857,6 +876,8 @@ mvn -q -DskipTests compile
 - AI Agent 重写学习实施计划书：`docs/AI Agent重写学习实施计划书.md`
 - AI Agent 第一阶段学习总结：`docs/AI Agent第一阶段学习总结.md`
 - AI Agent 第一阶段真实环境验收报告：`docs/AI Agent第一阶段真实环境验收报告.md`
+- AI Agent 第二阶段学习总结：`docs/AI Agent第二阶段学习总结.md`
+- AI Agent 第二阶段真实环境验收报告：`docs/AI Agent第二阶段真实环境验收报告.md`
 
 ## 15. 当前边界与未完成项
 
