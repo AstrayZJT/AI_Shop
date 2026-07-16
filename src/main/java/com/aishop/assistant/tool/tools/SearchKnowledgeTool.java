@@ -88,6 +88,7 @@ public class SearchKnowledgeTool implements AssistantTool {
                 Map.of(
                         "sources", sources,
                         "count", sources.size(),
+                        "retrieval", retrieval,
                         "contextChunkIds", retrieval.contextChunkIds(),
                         "contextTruncated", retrieval.contextTruncated()),
                 sources.isEmpty() ? "知识库没有可靠命中" : "知识库命中 " + sources.size() + " 条内容");

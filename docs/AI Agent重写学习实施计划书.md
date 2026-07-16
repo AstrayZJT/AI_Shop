@@ -10,6 +10,8 @@
 
 本轮第三阶段 RAG 链路已完成：实现原文与规范化文本保存、可配置 overlap 切块、chunk 偏移和哈希、批量 Embedding、pgvector Metadata、关键词与向量融合、阈值/去重/TopK/上下文限制、严格 JSON AnswerComposer、citation 白名单、Prompt Injection 边界和 Hit@K/MRR 评测。完整测试共 88 条；真实环境固定 5 个问题均在第一位命中，`Hit@K=1.0`、`MRR=1.0`。
 
+本轮第四阶段上下文与回答合成链路已于 2026-07-16 完成：正式聊天入口统一接入 Context、Planner、Tool、RAG 和 AnswerComposer；实现固定上下文预算、会话摘要上限、可信订单事实分层、跨轮订单指代、模型订单号二次约束和 Tool/RAG 结构复用。旧的关键词路由和直接订单动作聊天路径已移除，完整测试共 101 条。
+
 详细结果参见：
 
 - `docs/AI Agent第一阶段学习总结.md`
@@ -342,6 +344,8 @@ public interface AssistantTool {
 
 ### 5.5 阶段五：实现上下文、记忆和回答合成
 
+> 状态：已于 2026-07-16 完成，对应本轮 Goal 的“第四阶段”。
+
 #### 要做的事情
 
 1. 实现 `AssistantContextBuilder`。
@@ -368,6 +372,8 @@ public interface AssistantTool {
 - 用户第二轮使用“这个订单”时能关联上一轮目标。
 - 历史消息增长后 Prompt 仍有固定上限。
 - 模型不能通过历史摘要伪造订单归属或状态。
+- 正式 `POST /api/assistant/chat` 已统一接入 Planner、Tool、RAG 和结构化回答合成。
+- 完整自动化测试 101 条全部通过。
 
 ### 5.6 阶段六：实现多任务编排和状态机
 

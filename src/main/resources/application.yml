@@ -39,6 +39,15 @@ agent:
   webpage:
     max-characters: ${AGENT_WEBPAGE_MAX_CHARACTERS:8000}
 
+assistant:
+  context:
+    max-characters: ${ASSISTANT_CONTEXT_MAX_CHARACTERS:8000}
+    max-current-message-characters: ${ASSISTANT_CONTEXT_MAX_CURRENT_MESSAGE_CHARACTERS:4000}
+    max-summary-characters: ${ASSISTANT_CONTEXT_MAX_SUMMARY_CHARACTERS:1200}
+    max-recent-messages: ${ASSISTANT_CONTEXT_MAX_RECENT_MESSAGES:6}
+    max-message-characters: ${ASSISTANT_CONTEXT_MAX_MESSAGE_CHARACTERS:800}
+    max-order-facts: ${ASSISTANT_CONTEXT_MAX_ORDER_FACTS:3}
+
 rag:
   knowledge-path: knowledge
   chunk-size: ${RAG_CHUNK_SIZE:500}

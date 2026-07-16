@@ -31,6 +31,7 @@ class SearchKnowledgeToolTest {
 
         assertThat(outcome.data()).containsEntry("count", 1);
         assertThat(outcome.data()).containsEntry("contextChunkIds", List.of(1L));
+        assertThat(outcome.data().get("retrieval")).isInstanceOf(KnowledgeRetrievalResult.class);
         assertThat((List<?>) outcome.data().get("sources")).hasSize(1);
     }
 }

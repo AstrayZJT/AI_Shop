@@ -1,14 +1,8 @@
 package com.aishop.service;
 
-import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Predicate;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.bsc.langgraph4j.CompiledGraph;
 import org.bsc.langgraph4j.RunnableConfig;
@@ -18,20 +12,16 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.aishop.assistant.application.AssistantAgentService;
+import com.aishop.assistant.context.AssistantContextBuilder;
 import com.aishop.domain.AppUser;
 import com.aishop.domain.AssistantMessage;
 import com.aishop.domain.AssistantSession;
-import com.aishop.dto.PromotionDtos.PromotionResponse;
-import com.aishop.dto.OrderDtos.OrderResponse;
-import com.aishop.dto.ProductDtos.ProductResponse;
 import com.aishop.dto.AssistantDtos.ChatResponse;
 import com.aishop.dto.AssistantDtos.KnowledgeSourceResponse;
-import com.aishop.dto.AssistantDtos.SuggestedActionResponse;
 import com.aishop.dto.KnowledgeDtos.SearchResponse;
 import com.aishop.repository.AssistantMessageRepository;
 import com.aishop.repository.AssistantSessionRepository;
-
-import dev.langchain4j.model.chat.ChatModel;
 
 @Service
 public class AssistantService {
@@ -40,42 +30,23 @@ public class AssistantService {
     private static final String SERVICE_STATUS_ACTIVE = "ACTIVE";
     private static final String SERVICE_STATUS_ESCALATED = "ESCALATED";
     private static final String SERVICE_STATUS_RESOLVED = "RESOLVED";
-    private static final Pattern ORDER_NO_PATTERN = Pattern.compile("ORD-[A-Z0-9]{8}");
-    private static final Pattern PURCHASE_QUANTITY_PATTERN = Pattern.compile("(?:买|购买|下单|来|要|购入)\\D{0,4}(\\d{1,2}|一|二|两|三|四|五|六|七|八|九|十)\\s*(?:个|件|台|部|副|双|盒)?");
-    private static final Pattern ADDRESS_UPDATE_PATTERN = Pattern.compile("(?:改成|改为|修改为|修改成|更新为|更新成|收货地址为|地址为)(?<address>.+)$");
-    private static final Pattern ACTION_NOTE_PATTERN = Pattern.compile("(?:因为|原因是|原因|备注|说明)[：:，,\\s]*(?<note>.+)$");
 
     private final AssistantSessionRepository sessionRepository;
     private final AssistantMessageRepository messageRepository;
-    private final OrderService orderService;
-    private final ProductService productService;
-    private final KnowledgeService knowledgeService;
-    private final PromotionService promotionService;
-    private final ProductFavoriteService favoriteService;
-    private final CustomerBehaviorService behaviorService;
     private final CompiledGraph<MessagesState<String>> assistantGraph;
-    private final ChatModel chatModel;
+    private final AssistantAgentService assistantAgentService;
+    private final AssistantContextBuilder contextBuilder;
 
     public AssistantService(AssistantSessionRepository sessionRepository,
                             AssistantMessageRepository messageRepository,
-                            OrderService orderService,
-                            ProductService productService,
-                            KnowledgeService knowledgeService,
-                            PromotionService promotionService,
-                            ProductFavoriteService favoriteService,
-                            CustomerBehaviorService behaviorService,
                             CompiledGraph<MessagesState<String>> assistantGraph,
-                            ChatModel chatModel) {
+                            AssistantAgentService assistantAgentService,
+                            AssistantContextBuilder contextBuilder) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
-        this.orderService = orderService;
-        this.productService = productService;
-        this.knowledgeService = knowledgeService;
-        this.promotionService = promotionService;
-        this.favoriteService = favoriteService;
-        this.behaviorService = behaviorService;
         this.assistantGraph = assistantGraph;
-        this.chatModel = chatModel;
+        this.assistantAgentService = assistantAgentService;
+        this.contextBuilder = contextBuilder;
     }
 
     public List<AssistantSession> listSessions(AppUser user) {
@@ -84,11 +55,11 @@ public class AssistantService {
 
     public AssistantSession getOrCreateSession(AppUser user, Long sessionId) {
         if (sessionId != null) {
-            var session = sessionRepository.findByIdAndUser(sessionId, user)
+            AssistantSession session = sessionRepository.findByIdAndUser(sessionId, user)
                     .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
             return normalizeServiceStatus(session);
         }
-        var session = new AssistantSession();
+        AssistantSession session = new AssistantSession();
         session.setUser(user);
         session.setTitle("智能助手会话");
         session.setSummary("新会话");
@@ -115,12 +86,9 @@ public class AssistantService {
         markSessionEscalated(session);
         saveMessage(session, "user", requestText);
         String answer = alreadyEscalated
-                ? "你的会话已经在人工跟进中，我把你刚补充的说明也同步给人工客服了。"
+                ? "你的会话已经在人工跟进中，我把刚补充的说明也同步给人工客服了。"
                 : "我已经帮你转接人工客服，接下来管理员可以在后台直接回复你。";
-        session.setSummary(composeSummary(
-                session.getSummary(),
-                requestText,
-                answer));
+        session.setSummary(contextBuilder.nextConversationSummary(session.getSummary(), requestText, answer));
         sessionRepository.save(session);
         saveMessage(session, "assistant", answer);
         return session;
@@ -131,78 +99,45 @@ public class AssistantService {
         if (user == null) {
             throw new IllegalArgumentException("请先登录");
         }
-
-        var session = getOrCreateSession(user, sessionId);
-        if (SERVICE_STATUS_RESOLVED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
-            session.setServiceStatus(SERVICE_STATUS_ACTIVE);
-            session.setResolvedAt(null);
-        }
-        var currentThreadId = threadId == null || threadId.isBlank() ? "assistant-" + session.getId() : threadId;
+        AssistantSession session = getOrCreateSession(user, sessionId);
+        reopenResolvedSession(session);
+        String currentThreadId = threadId == null || threadId.isBlank()
+                ? "assistant-" + session.getId()
+                : threadId;
         log.info("assistant request: user={}, sessionId={}, threadId={}, message={}",
                 user.getUsername(), session.getId(), currentThreadId, preview(message));
 
-        try {
-            assistantGraph.invoke(Map.of("messages", List.of(message)), RunnableConfig.builder()
-                    .threadId(currentThreadId)
-                    .graphId("assistant-workflow")
-                    .build());
-        } catch (Exception ex) {
-            log.warn("assistant graph execution failed, continuing without checkpointed graph state", ex);
-        }
+        invokeCheckpointGraph(message, currentThreadId);
 
-        var intent = detectIntent(message);
-        var matchedProducts = productService.search(message).stream().limit(3).toList();
-        var favoriteProducts = favoriteService.recentFavoriteProducts(user, 3);
-        var behaviorProducts = behaviorService.recentInterestedProducts(user, 3);
-        var behaviorSummary = behaviorService.summarizeRecentBehavior(user, 6);
-        if (shouldRecordAssistantProductConsult(intent, message, matchedProducts)) {
-            behaviorService.recordEvent(
-                    user,
-                    matchedProducts.get(0).id(),
-                    CustomerBehaviorService.EVENT_AI_CONSULT,
-                    "assistant-chat",
-                    trim(message, 120),
-                    1);
+        String answer;
+        String intent;
+        List<KnowledgeSourceResponse> sources;
+        if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
+            answer = "你的会话已经转给人工客服，我会把这条补充信息同步给人工同事，请稍候查看人工回复。";
+            intent = "handoff";
+            sources = List.of();
+        } else {
+            var turn = assistantAgentService.handle(user, session, message);
+            var primaryTask = turn.execution().planner().plan().tasks().getFirst();
+            answer = turn.composedAnswer().answer();
+            intent = primaryTask.intent().name().toLowerCase();
+            sources = turn.ragAnswer() == null
+                    ? List.of()
+                    : turn.ragAnswer().retrievalHits().stream().map(this::toKnowledgeSourceResponse).toList();
+            log.info(
+                    "assistant agent response: sessionId={}, intent={}, plannerSource={}, taskCount={}, contextCharacters={}, contextTruncated={}, answerMode={}, sourceCount={}",
+                    session.getId(), intent, turn.execution().planner().source(),
+                    turn.execution().taskResults().size(), turn.context().estimatedCharacters(),
+                    turn.context().truncated(), turn.composedAnswer().mode(), sources.size());
         }
-        var allOrders = orderService.listOrders(user);
-        var recentOrders = allOrders.stream().limit(3).toList();
-        var exactOrder = findExactMentionedOrder(message, allOrders);
-        int requestedQuantity = extractRequestedQuantity(message);
-        var knowledgeHits = knowledgeService.search(message).stream()
-                .limit(3)
-                .toList();
-        var sourceTexts = knowledgeHits.stream()
-                .map(s -> s.title() + ": " + s.chunkText())
-                .toList();
-        var sources = knowledgeHits.stream()
-                .map(this::toKnowledgeSourceResponse)
-                .toList();
-        log.info("assistant context: sessionId={}, intent={}, sourceCount={}",
-                session.getId(), intent, sources.size());
-
-        var actionExecution = executeDirectAction(session, user, message, allOrders, exactOrder);
-        if (actionExecution != null) {
-            intent = actionExecution.intent();
-        }
-
-        var answer = actionExecution == null
-                ? buildPendingHandoffAnswer(session, user, intent, sourceTexts, matchedProducts, favoriteProducts, behaviorProducts, behaviorSummary, recentOrders, exactOrder, message, currentThreadId)
-                : actionExecution.answer();
-        var draftJson = actionExecution == null && !SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))
-                ? buildDraftIfNeeded(user, intent, currentThreadId, message, matchedProducts, requestedQuantity)
-                : null;
-        var suggestedActions = buildSuggestedActions(session, intent, message, matchedProducts, recentOrders, exactOrder, draftJson, knowledgeHits);
-        log.info("assistant response: sessionId={}, intent={}, draftCreated={}, answer={}",
-                session.getId(), intent, draftJson != null, preview(answer));
 
         session.setLastIntent(intent);
-        session.setSummary(composeSummary(session.getSummary(), message, answer));
+        session.setSummary(contextBuilder.nextConversationSummary(session.getSummary(), message, answer));
         sessionRepository.save(session);
-
         saveMessage(session, "user", message);
         saveMessage(session, "assistant", answer);
 
-        return new ChatResponse(session.getId(), answer, intent, currentThreadId, sources, draftJson, suggestedActions);
+        return new ChatResponse(session.getId(), answer, intent, currentThreadId, sources, null, List.of());
     }
 
     @Transactional
@@ -210,13 +145,31 @@ public class AssistantService {
         if (user == null) {
             throw new IllegalArgumentException("请先登录");
         }
-        var session = sessionRepository.findByIdAndUser(sessionId, user)
+        AssistantSession session = sessionRepository.findByIdAndUser(sessionId, user)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
         if (safeUnreadCount(session.getCustomerUnreadCount()) > 0L) {
             session.setCustomerUnreadCount(0L);
             sessionRepository.save(session);
         }
         return messageRepository.findBySessionOrderByCreatedAtAsc(session);
+    }
+
+    private void invokeCheckpointGraph(String message, String threadId) {
+        try {
+            assistantGraph.invoke(Map.of("messages", List.of(message)), RunnableConfig.builder()
+                    .threadId(threadId)
+                    .graphId("assistant-workflow")
+                    .build());
+        } catch (Exception ex) {
+            log.warn("assistant graph execution failed, continuing without checkpointed graph state", ex);
+        }
+    }
+
+    private void reopenResolvedSession(AssistantSession session) {
+        if (SERVICE_STATUS_RESOLVED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
+            session.setServiceStatus(SERVICE_STATUS_ACTIVE);
+            session.setResolvedAt(null);
+        }
     }
 
     private AssistantSession normalizeServiceStatus(AssistantSession session) {
@@ -234,476 +187,11 @@ public class AssistantService {
             session.setCustomerUnreadCount(0L);
             changed = true;
         }
-        if (changed) {
-            return sessionRepository.save(session);
-        }
-        return session;
+        return changed ? sessionRepository.save(session) : session;
     }
 
     private String normalizeServiceStatus(String status) {
-        if (status == null || status.isBlank()) {
-            return SERVICE_STATUS_ACTIVE;
-        }
-        return status.trim().toUpperCase();
-    }
-
-    private String buildPendingHandoffAnswer(AssistantSession session,
-                                             AppUser user,
-                                             String intent,
-                                             List<String> sources,
-                                             List<ProductResponse> matchedProducts,
-                                             List<ProductResponse> favoriteProducts,
-                                             List<ProductResponse> behaviorProducts,
-                                             String behaviorSummary,
-                                             List<OrderResponse> recentOrders,
-                                             OrderResponse exactOrder,
-                                             String message,
-                                             String threadId) {
-        if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
-            return "你的会话已经转给人工客服，我会把这条补充信息同步给人工同事，请稍候查看人工回复。";
-        }
-        return buildAnswer(user, intent, sources, matchedProducts, favoriteProducts, behaviorProducts, behaviorSummary, recentOrders, exactOrder, message, threadId);
-    }
-
-    private String buildAnswer(AppUser user,
-                               String intent,
-                               List<String> sources,
-                               List<ProductResponse> matchedProducts,
-                               List<ProductResponse> favoriteProducts,
-                               List<ProductResponse> behaviorProducts,
-                               String behaviorSummary,
-                               List<OrderResponse> recentOrders,
-                               OrderResponse exactOrder,
-                               String message,
-                               String threadId) {
-        OrderResponse focusOrder = findMentionedOrder(message, recentOrders, exactOrder);
-
-        if (isPromotionIntent(message)) {
-            return buildPromotionAnswer(focusOrder, recentOrders, matchedProducts);
-        }
-        if (isInvoiceIntent(message)) {
-            return buildInvoiceGuide(focusOrder, recentOrders);
-        }
-        if (isKnowledgePolicyIntent(message) && !hasExplicitOrderReference(message) && !sources.isEmpty()) {
-            return buildKnowledgeAnswer(sources);
-        }
-        if (isPaymentIntent(message)) {
-            return buildPaymentGuide(focusOrder, recentOrders);
-        }
-        if (isCancelIntent(message)) {
-            return buildCancelGuide(focusOrder, recentOrders);
-        }
-        if (isConfirmReceiptIntent(message)) {
-            return buildConfirmReceiptGuide(focusOrder, recentOrders);
-        }
-        if (isRefundIntent(message) && !isPurchaseIntent(message)) {
-            return buildRefundGuide(focusOrder, recentOrders, sources);
-        }
-        if (isAddressIntent(message)) {
-            return buildAddressGuide(user, focusOrder);
-        }
-        if ("order".equals(intent) && isOrderLookupIntent(message)) {
-            if (recentOrders.isEmpty()) {
-                return "你当前还没有可查询的订单。你可以先加入购物车结算，或者让我帮你生成一个下单草稿。";
-            }
-            if (isLogisticsSpecificIntent(message)) {
-                return buildOrderLogisticsAnswer(focusOrder != null ? focusOrder : recentOrders.get(0));
-            }
-            if (focusOrder != null) {
-                return "我帮你查到了当前最相关的订单：" + formatOrderDetail(focusOrder);
-            }
-            return "我帮你查到了最近的订单：" + formatOrders(recentOrders);
-        }
-        if ("order".equals(intent) && isPurchaseIntent(message)) {
-            var product = matchedProducts.isEmpty()
-                    ? firstAvailableProduct(favoriteProducts, behaviorProducts)
-                    : matchedProducts.get(0);
-            if (product != null) {
-                return "我已经为你准备了下单草稿，推荐商品是：%s，价格 %s。%s你确认后我就继续创建正式订单。"
-                        .formatted(product.name(), product.price(), bestPromotionHint(product.price()));
-            }
-        }
-        if ("product".equals(intent) && matchedProducts.isEmpty() && !favoriteProducts.isEmpty()) {
-            return "结合你最近收藏的商品，我建议先看这些：" + formatProducts(favoriteProducts)
-                    + "。这些都在你的收藏里，适合继续比较价格、库存和口碑，也可以让我直接生成下单草稿。";
-        }
-        if ("product".equals(intent) && matchedProducts.isEmpty() && !behaviorProducts.isEmpty()) {
-            return "结合你最近浏览、加购或咨询过的商品，我建议继续看这些：" + formatProducts(behaviorProducts)
-                    + "。如果你说“刚才那个”，我会优先按这些近期行为来理解。";
-        }
-        if ("product".equals(intent) && !matchedProducts.isEmpty()) {
-            if (matchedProducts.size() == 1) {
-                var product = matchedProducts.get(0);
-                return "我先给你推荐这款商品：%s，价格 %s。%s%s%s"
-                        .formatted(
-                                product.name(),
-                                product.price(),
-                                product.description(),
-                                productReviewSnippet(product),
-                                bestPromotionHint(product.price()));
-            }
-            return "我帮你筛了几款更相关的商品：" + formatProducts(matchedProducts);
-        }
-        if (isKnowledgePolicyIntent(message)) {
-            return "当前知识库还没有命中这类规则，你可以先在管理端补充售后、退款或物流文档，我再按规则回答你。";
-        }
-
-        var prompt = """
-                你是一个电商智能助手。
-                用户：%s
-                当前对话：%s
-                用户消息：%s
-                意图：%s
-                默认收货地址：%s
-                候选商品：%s
-                最近收藏：%s
-                近期商品行为：%s
-                近期意向商品：%s
-                最近订单：%s
-                当前活动：%s
-                相关知识：%s
-                回答要求：优先结合商品、订单、支付、售后规则和知识库，不要编造；如果用户在问订单，就先根据订单上下文回答；如果用户在问商品，就优先引用候选商品；如果用户在问地址、支付、取消、退款、确认收货等动作，要结合当前订单状态给出明确步骤；回答要简洁、明确、像客服。
-                """.formatted(
-                user.getDisplayName(),
-                threadId,
-                message,
-                intent,
-                user.getShippingAddress() == null ? "未填写" : user.getShippingAddress(),
-                matchedProducts.isEmpty() ? "无" : formatProducts(matchedProducts),
-                favoriteProducts.isEmpty() ? "无" : formatProducts(favoriteProducts),
-                behaviorSummary,
-                behaviorProducts.isEmpty() ? "无" : formatProducts(behaviorProducts),
-                recentOrders.isEmpty() ? "无" : formatOrders(recentOrders),
-                summarizePromotionsForPrompt(focusOrder, recentOrders, matchedProducts),
-                sources.isEmpty() ? "无" : String.join(" | ", sources));
-
-        try {
-            return chatModel.chat(prompt);
-        } catch (Exception ex) {
-            return "我收到了你的问题，正在整理更合适的建议。";
-        }
-    }
-
-    private ActionExecution executeDirectAction(AssistantSession session,
-                                                AppUser user,
-                                                String message,
-                                                List<OrderResponse> allOrders,
-                                                OrderResponse exactOrder) {
-        if (message == null || message.isBlank()) {
-            return null;
-        }
-        if (isHumanSupportIntent(message)) {
-            if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
-                return new ActionExecution("你的会话已经在人工跟进中，我会把这条消息继续同步给人工客服。", "handoff");
-            }
-            markSessionEscalated(session);
-            return new ActionExecution("我已经帮你转接人工客服，管理员接下来可以在后台直接回复你。", "handoff");
-        }
-        if (isPaymentIntent(message) && wantsDirectExecution(message)) {
-            String paymentMethod = extractPaymentMethod(message);
-            if (exactOrder != null) {
-                if (!canPay(exactOrder)) {
-                    return new ActionExecution(
-                            "订单 %s 当前状态是 %s，暂时不能直接支付。通常只有待支付订单可以继续完成付款。"
-                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
-                            "order_action");
-                }
-                OrderResponse updated = orderService.payOrder(
-                        user,
-                        exactOrder.id(),
-                        paymentMethod,
-                        extractActionNote(message, "AI 客服代完成模拟支付"),
-                        "AI 客服");
-                return new ActionExecution(
-                        "我已经帮你完成模拟支付，订单 %s 当前状态是 %s，支付方式是 %s。"
-                                .formatted(updated.orderNo(), statusLabel(updated.status()), defaultText(updated.paymentMethod(), "模拟支付")),
-                        "order_action");
-            }
-            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canPay);
-            if (candidate == null) {
-                return new ActionExecution(buildActionOrderPrompt("完成支付", eligibleOrders(allOrders, this::canPay), "你当前没有待支付的订单。"), "order_action");
-            }
-            OrderResponse updated = orderService.payOrder(
-                    user,
-                    candidate.id(),
-                    paymentMethod,
-                    extractActionNote(message, "AI 客服代完成模拟支付"),
-                    "AI 客服");
-            return new ActionExecution(
-                    "我已经帮你完成模拟支付，订单 %s 当前状态是 %s，支付方式是 %s。"
-                            .formatted(updated.orderNo(), statusLabel(updated.status()), defaultText(updated.paymentMethod(), "模拟支付")),
-                    "order_action");
-        }
-        if (isCancelIntent(message) && wantsDirectExecution(message)) {
-            if (exactOrder != null) {
-                if (!canCancel(exactOrder)) {
-                    return new ActionExecution(
-                            "订单 %s 当前状态是 %s，暂不支持直接取消。通常只有待发货或处理中订单可以取消。"
-                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
-                            "order_action");
-                }
-                OrderResponse updated = orderService.cancelOrder(user, exactOrder.id(), extractActionNote(message, "AI 客服代提交取消申请"), "AI 客服");
-                return new ActionExecution(
-                        "我已经帮你取消订单 %s，当前状态是 %s。".formatted(updated.orderNo(), statusLabel(updated.status())),
-                        "order_action");
-            }
-            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canCancel);
-            if (candidate == null) {
-                return new ActionExecution(buildActionOrderPrompt("取消订单", eligibleOrders(allOrders, this::canCancel), "你当前没有可取消的订单。"), "order_action");
-            }
-            OrderResponse updated = orderService.cancelOrder(user, candidate.id(), extractActionNote(message, "AI 客服代提交取消申请"), "AI 客服");
-            return new ActionExecution(
-                    "我已经帮你取消订单 %s，当前状态是 %s。".formatted(updated.orderNo(), statusLabel(updated.status())),
-                    "order_action");
-        }
-        if (isConfirmReceiptIntent(message) && wantsDirectExecution(message)) {
-            if (exactOrder != null) {
-                if (!canConfirmReceipt(exactOrder)) {
-                    return new ActionExecution(
-                            "订单 %s 当前状态是 %s，只有已发货订单才能直接确认收货。"
-                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
-                            "order_action");
-                }
-                OrderResponse updated = orderService.confirmReceipt(user, exactOrder.id(), "AI 客服");
-                return new ActionExecution(
-                        "我已经帮你确认收货，订单 %s 当前状态是 %s。".formatted(updated.orderNo(), statusLabel(updated.status())),
-                        "order_action");
-            }
-            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canConfirmReceipt);
-            if (candidate == null) {
-                return new ActionExecution(buildActionOrderPrompt("确认收货", eligibleOrders(allOrders, this::canConfirmReceipt), "你当前没有可确认收货的订单。"), "order_action");
-            }
-            OrderResponse updated = orderService.confirmReceipt(user, candidate.id(), "AI 客服");
-            return new ActionExecution(
-                    "我已经帮你确认收货，订单 %s 当前状态是 %s。".formatted(updated.orderNo(), statusLabel(updated.status())),
-                    "order_action");
-        }
-        if (isRefundIntent(message) && wantsDirectExecution(message) && !isPurchaseIntent(message)) {
-            if (exactOrder != null) {
-                if (!canRefund(exactOrder)) {
-                    return new ActionExecution(
-                            "订单 %s 当前状态是 %s，暂不支持直接申请退款。通常已发货或已完成订单可以发起退款。"
-                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
-                            "order_action");
-                }
-                OrderResponse updated = orderService.requestRefund(user, exactOrder.id(), extractActionNote(message, "AI 客服代提交退款申请"), "AI 客服");
-                return new ActionExecution(
-                        "我已经帮你提交退款申请，订单 %s 当前状态是 %s。平台会继续审核处理。"
-                                .formatted(updated.orderNo(), statusLabel(updated.status())),
-                        "order_action");
-            }
-            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canRefund);
-            if (candidate == null) {
-                return new ActionExecution(buildActionOrderPrompt("申请退款", eligibleOrders(allOrders, this::canRefund), "你当前没有符合退款条件的订单。"), "order_action");
-            }
-            OrderResponse updated = orderService.requestRefund(user, candidate.id(), extractActionNote(message, "AI 客服代提交退款申请"), "AI 客服");
-            return new ActionExecution(
-                    "我已经帮你提交退款申请，订单 %s 当前状态是 %s。平台会继续审核处理。"
-                            .formatted(updated.orderNo(), statusLabel(updated.status())),
-                    "order_action");
-        }
-        if (isAddressIntent(message) && wantsDirectExecution(message)) {
-            String newAddress = extractNewShippingAddress(message);
-            if (newAddress == null) {
-                return new ActionExecution(
-                        "我可以直接帮你改订单地址。你把新的收货地址完整发给我就行，例如：帮我把订单 ORD-12345678 的地址改成上海市徐汇区漕溪北路 399 号。",
-                        "order_action");
-            }
-            if (exactOrder != null) {
-                if (!canUpdateShippingAddress(exactOrder)) {
-                    return new ActionExecution(
-                            "订单 %s 当前状态是 %s，暂不支持直接改这个订单的地址。通常只有待发货或处理中订单还能在线改址。"
-                                    .formatted(exactOrder.orderNo(), statusLabel(exactOrder.status())),
-                            "order_action");
-                }
-                OrderResponse updated = orderService.updateShippingAddress(user, exactOrder.id(), newAddress, "AI 客服代修改收货地址", "AI 客服");
-                return new ActionExecution(
-                        "我已经帮你把订单 %s 的收货地址改成 %s。当前状态还是 %s。"
-                                .formatted(updated.orderNo(), updated.shippingAddress(), statusLabel(updated.status())),
-                        "order_action");
-            }
-            OrderResponse candidate = resolveDirectActionOrder(message, allOrders, this::canUpdateShippingAddress);
-            if (candidate == null) {
-                return new ActionExecution(buildActionOrderPrompt("修改收货地址", eligibleOrders(allOrders, this::canUpdateShippingAddress), "你当前没有支持改地址的待发货订单。"), "order_action");
-            }
-            OrderResponse updated = orderService.updateShippingAddress(user, candidate.id(), newAddress, "AI 客服代修改收货地址", "AI 客服");
-            return new ActionExecution(
-                    "我已经帮你把订单 %s 的收货地址改成 %s。当前状态还是 %s。"
-                            .formatted(updated.orderNo(), updated.shippingAddress(), statusLabel(updated.status())),
-                    "order_action");
-        }
-        return null;
-    }
-
-    private String buildDraftIfNeeded(AppUser user,
-                                      String intent,
-                                      String threadId,
-                                      String message,
-                                      List<ProductResponse> matchedProducts,
-                                      int requestedQuantity) {
-        if (!"order".equals(intent) || !isPurchaseIntent(message)) {
-            return null;
-        }
-        ProductResponse product = matchedProducts.isEmpty()
-                ? productService.listAll().stream().findFirst().orElse(null)
-                : matchedProducts.get(0);
-        if (product == null) {
-            return null;
-        }
-        return orderService.buildDraft(user, product.id(), requestedQuantity, threadId).draftJson();
-    }
-
-    private KnowledgeSourceResponse toKnowledgeSourceResponse(SearchResponse response) {
-        return new KnowledgeSourceResponse(
-                response.id(),
-                response.documentId(),
-                response.title(),
-                trim(response.chunkText(), 220),
-                response.matchMode(),
-                response.score(),
-                response.matchedTerms(),
-                response.indexed());
-    }
-
-    private List<SuggestedActionResponse> buildSuggestedActions(AssistantSession session,
-                                                                String intent,
-                                                                String message,
-                                                                List<ProductResponse> matchedProducts,
-                                                                List<OrderResponse> recentOrders,
-                                                                OrderResponse exactOrder,
-                                                                String draftJson,
-                                                                List<SearchResponse> knowledgeHits) {
-        LinkedHashMap<String, SuggestedActionResponse> actions = new LinkedHashMap<>();
-        OrderResponse focusOrder = findMentionedOrder(message, recentOrders, exactOrder);
-        String serviceStatus = normalizeServiceStatus(session.getServiceStatus());
-
-        if (draftJson != null) {
-            addSuggestedAction(actions, "draft-review", "继续确认下单草稿", "帮我再确认一下当前下单草稿信息", "order");
-        }
-
-        switch (intent) {
-            case "order", "order_action" -> appendOrderActions(actions, focusOrder, recentOrders, matchedProducts, message);
-            case "product" -> appendProductActions(actions, matchedProducts);
-            case "promotion" -> appendPromotionActions(actions, matchedProducts);
-            case "after_sales" -> appendAfterSalesActions(actions, focusOrder);
-            case "profile" -> appendProfileActions(actions, focusOrder);
-            case "handoff" -> appendHandoffActions(actions);
-            default -> appendDefaultActions(actions, knowledgeHits);
-        }
-
-        if ((isKnowledgePolicyIntent(message) || !knowledgeHits.isEmpty()) && !"after_sales".equals(intent)) {
-            addSuggestedAction(actions, "knowledge-policy", "继续问售后规则", "退款和退货规则是什么", "knowledge");
-        }
-        if (!SERVICE_STATUS_ESCALATED.equals(serviceStatus)) {
-            addSuggestedAction(actions, "handoff", "转人工跟进", "帮我转人工客服继续处理", "support");
-        }
-        if (actions.isEmpty()) {
-            appendDefaultActions(actions, knowledgeHits);
-        }
-        return new ArrayList<>(actions.values()).stream()
-                .limit(4)
-                .toList();
-    }
-
-    private void appendOrderActions(Map<String, SuggestedActionResponse> actions,
-                                    OrderResponse focusOrder,
-                                    List<OrderResponse> recentOrders,
-                                    List<ProductResponse> matchedProducts,
-                                    String message) {
-        OrderResponse order = focusOrder != null ? focusOrder : recentOrders.stream().findFirst().orElse(null);
-        if (order != null) {
-            String orderRef = order.orderNo();
-            addSuggestedAction(actions, "order-status", "再查一次订单状态", "帮我查一下订单 %s 的当前状态".formatted(orderRef), "order");
-            addSuggestedAction(actions, "order-logistics", "查看物流进度", "帮我查一下订单 %s 的物流信息".formatted(orderRef), "order");
-            if (canPay(order)) {
-                addSuggestedAction(actions, "order-pay", "直接完成支付", "帮我直接支付订单 %s".formatted(orderRef), "order");
-            } else if (canCancel(order)) {
-                addSuggestedAction(actions, "order-cancel", "直接取消订单", "帮我直接取消订单 %s".formatted(orderRef), "order");
-            } else if (canConfirmReceipt(order)) {
-                addSuggestedAction(actions, "order-confirm", "直接确认收货", "帮我直接确认收货订单 %s".formatted(orderRef), "order");
-            } else if (canRefund(order)) {
-                addSuggestedAction(actions, "order-refund", "申请退款", "帮我申请订单 %s 的退款".formatted(orderRef), "order");
-            }
-        }
-        if (isPurchaseIntent(message) && !matchedProducts.isEmpty()) {
-            addSuggestedAction(actions, "order-draft", "生成下单草稿", "帮我生成 %s 的下单草稿".formatted(matchedProducts.get(0).name()), "product");
-        }
-    }
-
-    private void appendProductActions(Map<String, SuggestedActionResponse> actions,
-                                      List<ProductResponse> matchedProducts) {
-        if (!matchedProducts.isEmpty()) {
-            ProductResponse product = matchedProducts.get(0);
-            addSuggestedAction(actions, "product-fit", "适合什么人", "%s 适合什么样的用户".formatted(product.name()), "product");
-            addSuggestedAction(actions, "product-compare", "比较同类商品", "帮我比较一下 %s 和同类商品".formatted(product.name()), "product");
-            addSuggestedAction(actions, "product-draft", "生成下单草稿", "帮我生成 %s 的下单草稿".formatted(product.name()), "product");
-            return;
-        }
-        addSuggestedAction(actions, "product-recommend", "推荐通勤商品", "帮我推荐一款适合通勤的商品", "product");
-        addSuggestedAction(actions, "product-budget", "按预算推荐", "预算 2000 元以内，有什么值得买的商品", "product");
-    }
-
-    private void appendPromotionActions(Map<String, SuggestedActionResponse> actions,
-                                        List<ProductResponse> matchedProducts) {
-        addSuggestedAction(actions, "promotion-cart", "看可用优惠", "按我当前购物车金额，看看有哪些优惠可以用", "promotion");
-        addSuggestedAction(actions, "promotion-best", "挑更划算的商品", "帮我推荐一款当前更划算的商品", "promotion");
-        if (!matchedProducts.isEmpty()) {
-            addSuggestedAction(actions, "promotion-draft", "优惠后下单", "结合当前优惠，帮我生成 %s 的下单草稿".formatted(matchedProducts.get(0).name()), "promotion");
-        }
-    }
-
-    private void appendAfterSalesActions(Map<String, SuggestedActionResponse> actions,
-                                         OrderResponse focusOrder) {
-        addSuggestedAction(actions, "after-sales-policy", "查看退款规则", "退款和退货规则是什么", "knowledge");
-        if (focusOrder != null) {
-            addSuggestedAction(actions, "after-sales-status", "查看售后状态", "帮我查一下订单 %s 的售后状态".formatted(focusOrder.orderNo()), "order");
-            if (canRefund(focusOrder)) {
-                addSuggestedAction(actions, "after-sales-refund", "直接申请退款", "帮我申请订单 %s 的退款".formatted(focusOrder.orderNo()), "order");
-            }
-        } else {
-            addSuggestedAction(actions, "after-sales-order", "看看最近订单", "帮我查最近订单状态", "order");
-        }
-    }
-
-    private void appendProfileActions(Map<String, SuggestedActionResponse> actions,
-                                      OrderResponse focusOrder) {
-        if (focusOrder != null && canUpdateShippingAddress(focusOrder)) {
-            addSuggestedAction(actions, "profile-address", "修改订单地址", "帮我把订单 %s 的地址改成上海市徐汇区漕溪北路 399 号".formatted(focusOrder.orderNo()), "order");
-        }
-        addSuggestedAction(actions, "profile-default-address", "查看默认地址", "我当前默认收货地址是什么", "profile");
-        addSuggestedAction(actions, "profile-order-status", "看订单状态", "帮我查最近订单状态", "order");
-    }
-
-    private void appendHandoffActions(Map<String, SuggestedActionResponse> actions) {
-        addSuggestedAction(actions, "handoff-note", "补充给人工", "我补充一下问题：请优先帮我看订单和售后进度", "support");
-        addSuggestedAction(actions, "handoff-order", "继续查订单", "帮我查最近订单状态", "order");
-        addSuggestedAction(actions, "handoff-logistics", "继续查物流", "帮我查最近订单物流", "order");
-    }
-
-    private void appendDefaultActions(Map<String, SuggestedActionResponse> actions,
-                                      List<SearchResponse> knowledgeHits) {
-        addSuggestedAction(actions, "default-product", "推荐商品", "帮我推荐一款适合通勤的商品", "product");
-        addSuggestedAction(actions, "default-order", "查询订单", "帮我查最近订单状态", "order");
-        addSuggestedAction(actions, "default-promotion", "查看优惠", "现在有什么优惠活动或优惠码可以用", "promotion");
-        if (!knowledgeHits.isEmpty()) {
-            addSuggestedAction(actions, "default-knowledge", "继续问规则", "售后和退款规则是什么", "knowledge");
-        }
-    }
-
-    private void addSuggestedAction(Map<String, SuggestedActionResponse> actions,
-                                    String key,
-                                    String label,
-                                    String prompt,
-                                    String kind) {
-        if (key == null || key.isBlank() || label == null || label.isBlank() || prompt == null || prompt.isBlank()) {
-            return;
-        }
-        actions.putIfAbsent(key, new SuggestedActionResponse(key, label, prompt, kind == null || kind.isBlank() ? "general" : kind));
-    }
-
-    private String composeSummary(String current, String userMessage, String answer) {
-        var base = current == null || current.isBlank() ? "" : current + " | ";
-        return base + "U:" + trim(userMessage, 80) + " A:" + trim(answer, 80);
+        return status == null || status.isBlank() ? SERVICE_STATUS_ACTIVE : status.trim().toUpperCase();
     }
 
     private void markSessionEscalated(AssistantSession session) {
@@ -713,34 +201,13 @@ public class AssistantService {
         session.setResolvedAt(null);
     }
 
-    private String trim(String text, int maxLen) {
-        if (text == null) {
-            return "";
-        }
-        return text.length() <= maxLen ? text : text.substring(0, maxLen);
-    }
-
-    private String preview(String text) {
-        if (text == null) {
-            return "";
-        }
-        return trim(text.replaceAll("\\s+", " ").trim(), 160);
-    }
-
     private void saveMessage(AssistantSession session, String role, String content) {
-        var msg = new AssistantMessage();
-        msg.setSession(session);
-        msg.setRole(role);
-        msg.setContent(content);
-        AssistantMessage saved = messageRepository.save(msg);
+        AssistantMessage message = new AssistantMessage();
+        message.setSession(session);
+        message.setRole(role);
+        message.setContent(content);
+        AssistantMessage saved = messageRepository.save(message);
         updateSessionActivity(session, role, saved.getCreatedAt());
-    }
-
-    private String blankToNull(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim();
     }
 
     private void updateSessionActivity(AssistantSession session, String role, Instant messageTime) {
@@ -766,866 +233,25 @@ public class AssistantService {
         }
     }
 
+    private KnowledgeSourceResponse toKnowledgeSourceResponse(SearchResponse response) {
+        return new KnowledgeSourceResponse(
+                response.id(), response.documentId(), response.title(), response.chunkText(),
+                response.matchMode(), response.score(), response.matchedTerms(), response.indexed());
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
     private long safeUnreadCount(Long count) {
         return count == null ? 0L : count;
     }
 
-    private String detectIntent(String message) {
-        var text = message == null ? "" : message.toLowerCase();
-        if (isHumanSupportIntent(message)) {
-            return "handoff";
-        }
-        if (isPromotionIntent(message)) {
-            return "promotion";
-        }
-        if (text.contains("退款") || text.contains("退货") || text.contains("售后") || text.contains("保修")) {
-            return "after_sales";
-        }
-        if (text.contains("地址") && (text.contains("修改") || text.contains("更改") || text.contains("更新") || text.contains("改成") || text.contains("改为") || text.contains("收货"))) {
-            return "profile";
-        }
-        if (text.contains("下单")
-                || text.contains("买")
-                || text.contains("结算")
-                || text.contains("订单")
-                || text.contains("发票")
-                || text.contains("开票")
-                || text.contains("物流")
-                || text.contains("发货")
-                || text.contains("支付")
-                || text.contains("付款")) {
-            return "order";
-        }
-        if (text.contains("推荐") || text.contains("商品") || text.contains("手机") || text.contains("耳机") || text.contains("平板")) {
-            return "product";
-        }
-        if (text.contains("faq") || text.contains("规则")) {
-            return "rag";
-        }
-        return "chat";
-    }
-
-    private boolean isPurchaseIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("下单") || text.contains("购买") || text.contains("买") || text.contains("来一单") || text.contains("结算");
-    }
-
-    private boolean isOrderLookupIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("订单")
-                || text.contains("物流")
-                || text.contains("发货")
-                || text.contains("状态")
-                || text.contains("到哪")
-                || text.contains("快递")
-                || text.contains("运单");
-    }
-
-    private boolean isLogisticsSpecificIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("物流")
-                || text.contains("快递")
-                || text.contains("运单")
-                || text.contains("派送")
-                || text.contains("配送")
-                || text.contains("到哪")
-                || text.contains("揽收")
-                || text.contains("签收");
-    }
-
-    private boolean isCancelIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("取消订单") || (text.contains("取消") && text.contains("订单"));
-    }
-
-    private boolean isPaymentIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("支付")
-                || text.contains("付款")
-                || text.contains("付钱")
-                || text.contains("补款")
-                || text.contains("结清");
-    }
-
-    private boolean isInvoiceIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("发票")
-                || text.contains("开票")
-                || text.contains("电子票")
-                || text.contains("专票")
-                || text.contains("普票");
-    }
-
-    private boolean isConfirmReceiptIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("确认收货") || (text.contains("收货") && text.contains("确认"));
-    }
-
-    private boolean isRefundIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("退款") || text.contains("退货") || text.contains("售后");
-    }
-
-    private boolean isAddressIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("地址")
-                && (text.contains("修改")
-                || text.contains("更改")
-                || text.contains("更新")
-                || text.contains("改成")
-                || text.contains("改为")
-                || text.contains("收货"));
-    }
-
-    private boolean isKnowledgePolicyIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("规则") || text.contains("政策") || text.contains("说明") || text.contains("faq");
-    }
-
-    private boolean isPromotionIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return text.contains("优惠")
-                || text.contains("优惠券")
-                || text.contains("优惠码")
-                || text.contains("满减")
-                || text.contains("折扣")
-                || text.contains("促销")
-                || text.contains("活动");
-    }
-
-    private boolean isHumanSupportIntent(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        boolean mentionsHumanSupport = text.contains("转人工")
-                || text.contains("转接人工")
-                || text.contains("人工客服")
-                || text.contains("人工处理")
-                || text.contains("人工跟进")
-                || text.contains("真人客服")
-                || text.contains("人工服务")
-                || text.contains("联系客服")
-                || text.contains("客服介入");
-        boolean asksHow = text.contains("怎么") || text.contains("如何");
-        return mentionsHumanSupport && !asksHow;
-    }
-
-    private boolean wantsDirectExecution(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        boolean asksHow = text.contains("怎么") || text.contains("如何") || text.contains("能不能") || text.contains("可以吗") || text.contains("可不可以");
-        boolean asksInfo = text.contains("是什么") || text.contains("规则") || text.contains("政策") || text.contains("支持吗");
-        boolean asksProgress = text.contains("看看")
-                || text.contains("看下")
-                || text.contains("查查")
-                || text.contains("查一下")
-                || text.contains("进度")
-                || text.contains("状态")
-                || text.contains("到哪")
-                || text.contains("怎么样")
-                || text.contains("咋样");
-        boolean explicitAction = text.contains("帮我")
-                || text.contains("给我")
-                || text.contains("直接")
-                || text.contains("现在")
-                || text.contains("马上")
-                || text.contains("立刻")
-                || text.contains("提交")
-                || text.contains("申请一下")
-                || text.contains("取消一下")
-                || text.contains("确认一下")
-                || text.contains("支付一下")
-                || text.contains("付一下")
-                || text.contains("改成")
-                || text.contains("改为")
-                || text.contains("修改为")
-                || text.contains("修改成");
-        return explicitAction && !asksHow && !asksInfo && !asksProgress;
-    }
-
-    private String extractPaymentMethod(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        if (text.contains("支付宝")) {
-            return "支付宝";
-        }
-        if (text.contains("微信")) {
-            return "微信支付";
-        }
-        if (text.contains("银行卡") || text.contains("信用卡")) {
-            return "银行卡";
-        }
-        return "模拟支付";
-    }
-
-    private int extractRequestedQuantity(String message) {
-        Matcher matcher = PURCHASE_QUANTITY_PATTERN.matcher(message == null ? "" : message);
-        if (!matcher.find()) {
-            return 1;
-        }
-        int quantity = parseQuantityToken(matcher.group(1));
-        return Math.max(1, Math.min(quantity, 20));
-    }
-
-    private int parseQuantityToken(String token) {
-        if (token == null || token.isBlank()) {
-            return 1;
-        }
-        return switch (token.trim()) {
-            case "一" -> 1;
-            case "二", "两" -> 2;
-            case "三" -> 3;
-            case "四" -> 4;
-            case "五" -> 5;
-            case "六" -> 6;
-            case "七" -> 7;
-            case "八" -> 8;
-            case "九" -> 9;
-            case "十" -> 10;
-            default -> {
-                try {
-                    yield Integer.parseInt(token.trim());
-                } catch (NumberFormatException ex) {
-                    yield 1;
-                }
-            }
-        };
-    }
-
-    private boolean hasExplicitOrderReference(String message) {
-        String text = message == null ? "" : message.toLowerCase();
-        return ORDER_NO_PATTERN.matcher(text.toUpperCase()).find()
-                || text.contains("这个订单")
-                || text.contains("我的订单")
-                || text.contains("最近订单")
-                || text.contains("最新订单");
-    }
-
-    private List<OrderResponse> eligibleOrders(List<OrderResponse> orders, Predicate<OrderResponse> predicate) {
-        return orders.stream().filter(predicate).toList();
-    }
-
-    private OrderResponse resolveDirectActionOrder(String message,
-                                                   List<OrderResponse> orders,
-                                                   Predicate<OrderResponse> predicate) {
-        List<OrderResponse> eligible = eligibleOrders(orders, predicate);
-        if (eligible.isEmpty()) {
-            return null;
-        }
-        String text = message == null ? "" : message.toLowerCase();
-        if (eligible.size() == 1) {
-            return eligible.get(0);
-        }
-        if (text.contains("最近") || text.contains("最新")) {
-            return eligible.get(0);
-        }
-        if (text.contains("这个订单") || text.contains("这笔订单") || text.contains("该订单")) {
-            return eligible.size() == 1 ? eligible.get(0) : null;
-        }
-        return null;
-    }
-
-    private String buildActionOrderPrompt(String actionLabel, List<OrderResponse> eligibleOrders, String emptyMessage) {
-        if (eligibleOrders.isEmpty()) {
-            return emptyMessage;
-        }
-        return "我可以直接帮你%s，但你当前有多笔符合条件的订单。请补充订单号，例如：%s。"
-                .formatted(actionLabel, eligibleOrders.stream()
-                        .limit(3)
-                        .map(OrderResponse::orderNo)
-                        .reduce((left, right) -> left + " / " + right)
-                        .orElse("ORD-XXXXXXXX"));
-    }
-
-    private String extractActionNote(String message, String defaultNote) {
-        Matcher matcher = ACTION_NOTE_PATTERN.matcher(message == null ? "" : message);
-        if (!matcher.find()) {
-            return defaultNote;
-        }
-        String note = matcher.group("note");
-        return sanitizeTailText(note, defaultNote);
-    }
-
-    private String extractNewShippingAddress(String message) {
-        Matcher matcher = ADDRESS_UPDATE_PATTERN.matcher(message == null ? "" : message);
-        if (!matcher.find()) {
-            return null;
-        }
-        return sanitizeTailText(matcher.group("address"), null);
-    }
-
-    private String sanitizeTailText(String value, String fallback) {
-        if (value == null) {
-            return fallback;
-        }
-        String normalized = value.trim()
-                .replace("。", "")
-                .replace("！", "")
-                .replace("!", "")
-                .replace("？", "")
-                .replace("?", "")
-                .replace("；", "")
-                .replace(";", "");
-        return normalized.isBlank() ? fallback : normalized;
-    }
-
-    private OrderResponse findMentionedOrder(String message, List<OrderResponse> orders, OrderResponse exactOrder) {
-        if (exactOrder != null) {
-            return exactOrder;
-        }
-        if (orders == null || orders.isEmpty()) {
-            return null;
-        }
-        String text = message == null ? "" : message.toLowerCase();
-        return orders.stream()
-                .filter(order -> order.orderNo() != null && text.contains(order.orderNo().toLowerCase()))
-                .findFirst()
-                .orElse(orders.get(0));
-    }
-
-    private OrderResponse findExactMentionedOrder(String message, List<OrderResponse> orders) {
-        Matcher matcher = ORDER_NO_PATTERN.matcher(message == null ? "" : message.toUpperCase());
-        if (!matcher.find()) {
-            return null;
-        }
-        String orderNo = matcher.group();
-        return orders.stream()
-                .filter(order -> orderNo.equalsIgnoreCase(order.orderNo()))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private String buildPaymentGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
-        if (orders.isEmpty()) {
-            return "你当前还没有订单，暂时没有需要支付的对象。先下单后，我可以继续帮你完成模拟支付。";
-        }
-        if (focusOrder != null && canPay(focusOrder)) {
-            return "订单 %s 当前状态是 %s，你可以在“我的订单”里选择支付方式后点击“模拟支付”，支付完成后会进入待发货。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-        }
-        if (focusOrder != null && focusOrder.paidAt() != null) {
-            return "订单 %s 已经完成支付，当前状态是 %s，支付方式是 %s。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()), defaultText(focusOrder.paymentMethod(), "模拟支付"));
-        }
-        if (focusOrder != null) {
-            return "订单 %s 当前状态是 %s，暂时不需要再次支付。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-        }
-        OrderResponse candidate = firstOrderWithStatus(orders, "PENDING_PAYMENT");
-        if (candidate != null) {
-            return "你最近待支付的订单是 %s，当前状态是 %s。到“我的订单”里点“模拟支付”就可以继续。"
-                    .formatted(candidate.orderNo(), statusLabel(candidate.status()));
-        }
-        return "你最近没有待支付的订单；如果你刚完成支付，我也可以继续帮你查后续发货进度。";
-    }
-
-    private String buildInvoiceGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
-        if (orders.isEmpty()) {
-            return "你当前还没有订单，暂时没有可申请发票的对象。完成下单并支付后，我可以继续帮你看发票状态。";
-        }
-        if (focusOrder == null) {
-            focusOrder = orders.get(0);
-        }
-        var invoice = focusOrder.invoice();
-        if (invoice != null) {
-            return switch (invoice.status()) {
-                case "REQUESTED" -> "订单 %s 的发票申请已经提交，当前正在等待平台开票。抬头是 %s，接收邮箱 %s。"
-                        .formatted(focusOrder.orderNo(), invoice.invoiceTitle(), invoice.email());
-                case "ISSUED" -> "订单 %s 的发票已经开具完成，发票号码 %s，接收邮箱 %s。%s"
-                        .formatted(
-                                focusOrder.orderNo(),
-                                defaultText(invoice.invoiceNo(), "待补充"),
-                                invoice.email(),
-                                defaultText(invoice.adminReply(), "你可以到订单详情里查看开票信息。"));
-                case "REJECTED" -> "订单 %s 的发票申请已被驳回。原因：%s。你可以在订单卡片里重新填写抬头和邮箱后再次提交。"
-                        .formatted(focusOrder.orderNo(), defaultText(invoice.adminReply(), "平台未补充驳回说明"));
-                default -> "订单 %s 当前有一条发票记录，状态是 %s。"
-                        .formatted(focusOrder.orderNo(), invoice.status());
-            };
-        }
-        if (focusOrder.paidAt() == null) {
-            return "订单 %s 还没有完成支付，通常需要先支付成功后才能申请发票。"
-                    .formatted(focusOrder.orderNo());
-        }
-        if ("CANCELLED".equals(focusOrder.status())) {
-            return "订单 %s 已经取消，通常不能再申请发票。".formatted(focusOrder.orderNo());
-        }
-        return "订单 %s 已经支付成功，目前还没有发票申请。你可以在“我的订单”里填写抬头类型、发票抬头和接收邮箱后提交开票申请。"
-                .formatted(focusOrder.orderNo());
-    }
-
-    private String buildCancelGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
-        if (orders.isEmpty()) {
-            return "你还没有可取消的订单。先下单后，我可以继续帮你判断是否能取消。";
-        }
-        if (focusOrder != null && canCancel(focusOrder)) {
-            return "订单 %s 当前状态是 %s，可以在线取消。你可以在“我的订单”里点击“取消订单”，补充原因后提交。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-        }
-        if (focusOrder != null) {
-            return "订单 %s 当前状态是 %s，暂不支持在线取消。通常只有待支付、待发货或处理中订单可以取消。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-        }
-        OrderResponse candidate = firstOrderWithStatus(orders, "PENDING_PAYMENT", "CONFIRMED", "PROCESSING");
-        if (candidate != null) {
-            return "你最近可取消的订单是 %s，当前状态是 %s。到“我的订单”里点击“取消订单”就可以提交。"
-                    .formatted(candidate.orderNo(), statusLabel(candidate.status()));
-        }
-        return "你最近的订单里没有支持在线取消的订单。通常只有待支付、待发货或处理中订单可以取消。";
-    }
-
-    private String buildConfirmReceiptGuide(OrderResponse focusOrder, List<OrderResponse> orders) {
-        if (orders.isEmpty()) {
-            return "你当前还没有订单，暂时不需要确认收货。";
-        }
-        if (focusOrder != null && canConfirmReceipt(focusOrder)) {
-            return "订单 %s 已经是 %s，你可以在“我的订单”里点击“确认收货”完成订单。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-        }
-        if (focusOrder != null) {
-            return "订单 %s 当前状态是 %s，只有已发货订单才能确认收货。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-        }
-        OrderResponse candidate = firstOrderWithStatus(orders, "SHIPPED");
-        if (candidate != null) {
-            return "你最近可以确认收货的订单是 %s，当前状态是 %s。收到商品后，直接在订单卡片里点击“确认收货”。"
-                    .formatted(candidate.orderNo(), statusLabel(candidate.status()));
-        }
-        return "你最近没有处于已发货状态的订单，所以暂时不能确认收货。";
-    }
-
-    private String buildRefundGuide(OrderResponse focusOrder, List<OrderResponse> orders, List<String> sources) {
-        String policySnippet = sources.isEmpty() ? "" : " 相关规则参考：" + summarizeSources(sources);
-        if (orders.isEmpty()) {
-            return "你当前还没有订单，暂时没有可以申请退款的对象。" + policySnippet;
-        }
-        if (focusOrder != null && focusOrder.afterSales() != null) {
-            String afterSalesAnswer = buildAfterSalesStatusAnswer(focusOrder);
-            if (afterSalesAnswer != null) {
-                return afterSalesAnswer + (policySnippet.isBlank() ? "" : policySnippet);
-            }
-        }
-        if (focusOrder != null && canRefund(focusOrder)) {
-            return "订单 %s 当前状态是 %s，可以在线申请退款。你可以在“我的订单”里点击“申请退款”，填写原因后提交。%s"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()), policySnippet.isBlank() ? "" : policySnippet);
-        }
-        if (focusOrder != null && "REFUND_REQUESTED".equals(focusOrder.status())) {
-            return "订单 %s 已经进入退款申请状态，平台会继续审核处理。%s"
-                    .formatted(focusOrder.orderNo(), policySnippet.isBlank() ? "" : policySnippet);
-        }
-        if (focusOrder != null && "REFUNDED".equals(focusOrder.status())) {
-            return "订单 %s 已经退款完成，当前状态是 %s。你可以查看订单备注了解售后处理记录。%s"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()), policySnippet.isBlank() ? "" : policySnippet);
-        }
-        if (focusOrder != null) {
-            return "订单 %s 当前状态是 %s，暂不支持在线申请退款。通常已发货或已完成订单支持发起退款。%s"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()), policySnippet.isBlank() ? "" : policySnippet);
-        }
-        OrderResponse candidate = firstOrderWithStatus(orders, "SHIPPED", "COMPLETED");
-        if (candidate != null) {
-            return "你最近可申请退款的订单是 %s，当前状态是 %s。到订单卡片里点击“申请退款”并补充原因即可。%s"
-                    .formatted(candidate.orderNo(), statusLabel(candidate.status()), policySnippet.isBlank() ? "" : policySnippet);
-        }
-        return "你最近没有符合退款条件的订单。通常已发货或已完成订单支持在线申请退款。%s"
-                .formatted(policySnippet.isBlank() ? "" : policySnippet);
-    }
-
-    private String buildAddressGuide(AppUser user, OrderResponse focusOrder) {
-        String currentAddress = user.getShippingAddress() == null || user.getShippingAddress().isBlank()
-                ? "你当前还没有设置默认收货地址"
-                : "你当前的默认收货地址是：" + user.getShippingAddress();
-        if (focusOrder == null) {
-            return currentAddress + "。你可以在客户端“我的资料”里直接修改，保存后购物车结算会优先带出新地址。";
-        }
-        if (canUpdateShippingAddress(focusOrder)) {
-            return currentAddress + "。订单 %s 当前状态是 %s，支付完成前和发货前都还支持直接改这个订单的收货地址。你可以在“我的订单”里填写新地址后点击“修改地址”。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-        }
-        if ("SHIPPED".equals(focusOrder.status()) || "COMPLETED".equals(focusOrder.status()) || "REFUND_REQUESTED".equals(focusOrder.status())) {
-            return currentAddress + "。订单 %s 当前状态是 %s，这类订单通常已经不支持在线改址；你仍然可以先更新默认地址，后续订单会使用新地址。"
-                    .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-        }
-        return currentAddress + "。如果你是想修改后续下单地址，直接在“我的资料”里保存即可；如果你想处理订单 %s，当前状态是 %s，建议优先联系平台人工处理。"
-                .formatted(focusOrder.orderNo(), statusLabel(focusOrder.status()));
-    }
-
-    private String buildAfterSalesStatusAnswer(OrderResponse order) {
-        var afterSales = order.afterSales();
-        if (afterSales == null) {
-            return null;
-        }
-        return switch (afterSales.status()) {
-            case "REQUESTED" -> "订单 %s 的退款申请已经提交，当前正在等待平台审核。"
-                    .formatted(order.orderNo());
-            case "AWAITING_CUSTOMER_RETURN" -> "订单 %s 已经通过退货退款审核。请按回寄地址 %s 寄回商品，管理员说明是：%s。寄出后可在“我的订单”里提交回寄物流。"
-                    .formatted(
-                            order.orderNo(),
-                            defaultText(afterSales.returnAddress(), "平台稍后补充回寄地址"),
-                            defaultText(afterSales.adminReply(), "请尽快回寄商品"));
-            case "RETURN_SHIPPED" -> "订单 %s 的退货商品已经回寄，当前回寄物流是 %s，运单号 %s。平台确认收到退货后会继续完成退款。"
-                    .formatted(
-                            order.orderNo(),
-                            defaultText(afterSales.returnCarrier(), "待补充"),
-                            defaultText(afterSales.returnTrackingNo(), "待补充"));
-            case "REFUNDED" -> "订单 %s 的售后已经处理完成，退款已经到账。"
-                    .formatted(order.orderNo());
-            case "REJECTED" -> "订单 %s 的售后申请已被驳回。管理员说明：%s。"
-                    .formatted(order.orderNo(), defaultText(afterSales.adminReply(), "暂无补充说明"));
-            default -> null;
-        };
-    }
-
-    private String buildOrderLogisticsAnswer(OrderResponse order) {
-        if (order == null) {
-            return "你当前还没有可查询物流的订单。";
-        }
-        if (order.afterSales() != null && "RETURN_SHIPPED".equals(order.afterSales().status())) {
-            return "订单 %s 当前处于退款售后阶段。你提交的回寄物流是 %s，运单号 %s，平台确认收到退货后会继续完成退款。"
-                    .formatted(
-                            order.orderNo(),
-                            defaultText(order.afterSales().returnCarrier(), "待补充"),
-                            defaultText(order.afterSales().returnTrackingNo(), "待补充"));
-        }
-        String carrier = order.shippingCarrier() == null || order.shippingCarrier().isBlank() ? "暂未分配物流公司" : order.shippingCarrier();
-        String trackingNo = order.trackingNo() == null || order.trackingNo().isBlank() ? "暂未生成运单号" : order.trackingNo();
-        var logisticsEvent = latestLogisticsEvent(order);
-        if ("PENDING_PAYMENT".equals(order.status())) {
-            return "订单 %s 当前状态是 %s，系统还在等待支付完成，所以还没有进入发货流程。"
-                    .formatted(order.orderNo(), statusLabel(order.status()));
-        }
-        if ("CONFIRMED".equals(order.status()) || "PROCESSING".equals(order.status())) {
-            return "订单 %s 当前状态是 %s，还没正式发货。发货后我可以继续帮你追踪物流节点。"
-                    .formatted(order.orderNo(), statusLabel(order.status()));
-        }
-        if ("CANCELLED".equals(order.status())) {
-            return "订单 %s 已经取消，不再继续物流履约。".formatted(order.orderNo());
-        }
-        StringBuilder builder = new StringBuilder()
-                .append("订单 ")
-                .append(order.orderNo())
-                .append(" 当前状态是 ")
-                .append(statusLabel(order.status()))
-                .append("，物流公司 ")
-                .append(carrier)
-                .append("，运单号 ")
-                .append(trackingNo)
-                .append("。");
-        if (logisticsEvent != null && logisticsEvent.detail() != null && !logisticsEvent.detail().isBlank()) {
-            builder.append(" 最新物流节点：").append(logisticsEvent.detail()).append("。");
-        } else if (order.shippedAt() != null) {
-            builder.append(" 最近一次发货时间是 ").append(order.shippedAt()).append("。");
-        } else {
-            builder.append(" 当前还没有更细的物流节点更新。");
-        }
-        return builder.toString();
-    }
-
-    private String buildKnowledgeAnswer(List<String> sources) {
-        return "我在知识库里查到了这些规则：" + summarizeSources(sources);
-    }
-
-    private String buildPromotionAnswer(OrderResponse focusOrder,
-                                        List<OrderResponse> recentOrders,
-                                        List<ProductResponse> matchedProducts) {
-        BigDecimal referenceSubtotal = estimatePromotionSubtotal(focusOrder, recentOrders, matchedProducts);
-        List<PromotionResponse> promotions = safeListPromotions(referenceSubtotal);
-        if (promotions.isEmpty()) {
-            return "当前没有可用的优惠活动。你也可以告诉我想买什么，我可以按预算帮你挑更划算的商品。";
-        }
-        String prefix = referenceSubtotal.compareTo(BigDecimal.ZERO) > 0
-                ? "按你当前提到的金额，我帮你筛到这些活动："
-                : "当前可用的优惠活动有：";
-        return prefix + formatPromotions(promotions) + "。如果你已经选好了商品，我也可以继续帮你判断哪一个更划算。";
-    }
-
-    private String summarizeSources(List<String> sources) {
-        return sources.stream()
-                .limit(2)
-                .map(source -> source.length() <= 96 ? source : source.substring(0, 96) + "...")
-                .reduce((left, right) -> left + " | " + right)
-                .orElse("暂无命中");
-    }
-
-    private String summarizePromotionsForPrompt(OrderResponse focusOrder,
-                                                List<OrderResponse> recentOrders,
-                                                List<ProductResponse> matchedProducts) {
-        List<PromotionResponse> promotions = safeListPromotions(estimatePromotionSubtotal(focusOrder, recentOrders, matchedProducts));
-        return promotions.isEmpty() ? "暂无可用活动" : formatPromotions(promotions);
-    }
-
-    private BigDecimal estimatePromotionSubtotal(OrderResponse focusOrder,
-                                                 List<OrderResponse> recentOrders,
-                                                 List<ProductResponse> matchedProducts) {
-        if (focusOrder != null) {
-            return positiveMoney(focusOrder.originalAmount() != null ? focusOrder.originalAmount() : focusOrder.totalAmount());
-        }
-        if (!matchedProducts.isEmpty()) {
-            return positiveMoney(matchedProducts.get(0).price());
-        }
-        if (!recentOrders.isEmpty()) {
-            OrderResponse order = recentOrders.get(0);
-            return positiveMoney(order.originalAmount() != null ? order.originalAmount() : order.totalAmount());
-        }
-        return BigDecimal.ZERO;
-    }
-
-    private BigDecimal positiveMoney(BigDecimal value) {
-        return value == null ? BigDecimal.ZERO : value.max(BigDecimal.ZERO);
-    }
-
-    private String bestPromotionHint(BigDecimal subtotal) {
-        List<PromotionResponse> promotions = safeListPromotions(positiveMoney(subtotal));
-        if (promotions.isEmpty()) {
+    private String preview(String text) {
+        if (text == null) {
             return "";
         }
-        PromotionResponse promotion = promotions.stream()
-                .filter(PromotionResponse::applicable)
-                .findFirst()
-                .orElse(promotions.get(0));
-        String title = defaultText(promotion.title(), promotion.code());
-        String hint = defaultText(promotion.applyHint(), "提交订单时校验");
-        return promotion.applicable()
-                ? "当前可用活动是 " + title + "，" + hint + "。"
-                : "当前可关注活动是 " + title + "，" + hint + "。";
+        String normalized = text.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 160 ? normalized : normalized.substring(0, 160);
     }
-
-    private List<PromotionResponse> safeListPromotions(BigDecimal subtotal) {
-        try {
-            return promotionService.listAvailable(positiveMoney(subtotal));
-        } catch (Exception ex) {
-            log.warn("promotion lookup failed in assistant flow, subtotal={}", subtotal, ex);
-            return List.of();
-        }
-    }
-
-    private String formatPromotions(List<PromotionResponse> promotions) {
-        return promotions.stream()
-                .limit(3)
-                .map(this::formatPromotionSnippet)
-                .reduce((left, right) -> left + " | " + right)
-                .orElse("暂无可用活动");
-    }
-
-    private String formatPromotionSnippet(PromotionResponse promotion) {
-        String title = defaultText(promotion.title(), promotion.code());
-        String threshold = "满 " + promotion.minOrderAmount() + " 可用";
-        String discount = "PERCENT".equals(promotion.discountType())
-                ? "减免 " + promotion.discountValue() + "%"
-                : "立减 " + promotion.discountValue();
-        String hint = defaultText(promotion.applyHint(), "提交订单时校验");
-        return "%s(%s, %s, %s)".formatted(title, promotion.code(), discount, threshold + "，" + hint);
-    }
-
-    private OrderResponse firstOrderWithStatus(List<OrderResponse> orders, String... statuses) {
-        for (OrderResponse order : orders) {
-            for (String status : statuses) {
-                if (status.equals(order.status())) {
-                    return order;
-                }
-            }
-        }
-        return null;
-    }
-
-    private boolean canCancel(OrderResponse order) {
-        return "PENDING_PAYMENT".equals(order.status())
-                || "CONFIRMED".equals(order.status())
-                || "PROCESSING".equals(order.status());
-    }
-
-    private boolean canPay(OrderResponse order) {
-        return "PENDING_PAYMENT".equals(order.status());
-    }
-
-    private boolean canConfirmReceipt(OrderResponse order) {
-        return "SHIPPED".equals(order.status());
-    }
-
-    private boolean canRefund(OrderResponse order) {
-        return "SHIPPED".equals(order.status()) || "COMPLETED".equals(order.status());
-    }
-
-    private boolean canUpdateShippingAddress(OrderResponse order) {
-        return "PENDING_PAYMENT".equals(order.status())
-                || "CONFIRMED".equals(order.status())
-                || "PROCESSING".equals(order.status());
-    }
-
-    private String formatOrderDetail(OrderResponse order) {
-        StringBuilder builder = new StringBuilder();
-        var logisticsEvent = latestLogisticsEvent(order);
-        builder.append(order.orderNo())
-                .append("[")
-                .append(statusLabel(order.status()))
-                .append(", 金额")
-                .append(order.totalAmount())
-                .append(", 地址")
-                .append(order.shippingAddress() == null ? "待补充" : order.shippingAddress());
-        if (hasDiscount(order)) {
-            builder.append(", 原价").append(order.originalAmount());
-            builder.append(", 优惠").append(order.discountAmount());
-        }
-        if (order.promotionTitle() != null && !order.promotionTitle().isBlank()) {
-            builder.append(", 活动").append(order.promotionTitle());
-        } else if (order.promotionCode() != null && !order.promotionCode().isBlank()) {
-            builder.append(", 活动").append(order.promotionCode());
-        }
-        if (order.shippingCarrier() != null && !order.shippingCarrier().isBlank()) {
-            builder.append(", 物流").append(order.shippingCarrier());
-        }
-        if (order.trackingNo() != null && !order.trackingNo().isBlank()) {
-            builder.append(", 运单").append(order.trackingNo());
-        }
-        if (order.shippedAt() != null) {
-            builder.append(", 发货时间").append(order.shippedAt());
-        }
-        if (order.paymentMethod() != null && !order.paymentMethod().isBlank()) {
-            builder.append(", 支付方式").append(order.paymentMethod());
-        }
-        if (order.paymentReference() != null && !order.paymentReference().isBlank()) {
-            builder.append(", 支付流水").append(order.paymentReference());
-        }
-        if (order.paidAt() != null) {
-            builder.append(", 支付时间").append(order.paidAt());
-        }
-        if (order.invoice() != null) {
-            builder.append(", 发票").append(invoiceStatusLabel(order.invoice().status()));
-            if (order.invoice().invoiceNo() != null && !order.invoice().invoiceNo().isBlank()) {
-                builder.append(", 票号").append(order.invoice().invoiceNo());
-            }
-        }
-        if (logisticsEvent != null && logisticsEvent.detail() != null && !logisticsEvent.detail().isBlank()) {
-            builder.append(", 最新物流").append(logisticsEvent.detail());
-        }
-        if (order.afterSales() != null) {
-            builder.append(", 售后阶段").append(afterSalesStatusLabel(order.afterSales().status()));
-        }
-        if (order.timeline() != null && !order.timeline().isEmpty()) {
-            var latestEvent = order.timeline().get(order.timeline().size() - 1);
-            builder.append(", 最新进度")
-                    .append(latestEvent.title());
-            if (latestEvent.occurredAt() != null) {
-                builder.append("@").append(latestEvent.occurredAt());
-            }
-        }
-        builder.append("]");
-        return builder.toString();
-    }
-
-    private com.aishop.dto.OrderDtos.OrderTimelineResponse latestLogisticsEvent(OrderResponse order) {
-        if (order.timeline() == null || order.timeline().isEmpty()) {
-            return null;
-        }
-        for (int index = order.timeline().size() - 1; index >= 0; index--) {
-            var event = order.timeline().get(index);
-            if ("LOGISTICS_UPDATED".equals(event.eventType()) || "ORDER_SHIPPED".equals(event.eventType())) {
-                return event;
-            }
-        }
-        return null;
-    }
-
-    private String statusLabel(String status) {
-        return switch (status) {
-            case "PENDING_CONFIRMATION" -> "待确认";
-            case "PENDING_PAYMENT" -> "待支付";
-            case "CONFIRMED" -> "待发货";
-            case "PROCESSING" -> "处理中";
-            case "SHIPPED" -> "已发货";
-            case "COMPLETED" -> "已完成";
-            case "REFUND_REQUESTED" -> "退款处理中";
-            case "REFUNDED" -> "已退款";
-            case "CANCELLED" -> "已取消";
-            default -> status;
-        };
-    }
-
-    private boolean shouldRecordAssistantProductConsult(String intent,
-                                                        String message,
-                                                        List<ProductResponse> matchedProducts) {
-        return !matchedProducts.isEmpty()
-                && ("product".equals(intent)
-                || isPurchaseIntent(message)
-                || isPromotionIntent(message));
-    }
-
-    private ProductResponse firstAvailableProduct(List<ProductResponse> favoriteProducts,
-                                                  List<ProductResponse> behaviorProducts) {
-        if (!favoriteProducts.isEmpty()) {
-            return favoriteProducts.get(0);
-        }
-        if (!behaviorProducts.isEmpty()) {
-            return behaviorProducts.get(0);
-        }
-        return productService.listAll().stream().findFirst().orElse(null);
-    }
-
-    private String formatProducts(List<ProductResponse> products) {
-        return products.stream()
-                .map(product -> "%s(%s, 库存%s%s)".formatted(
-                        product.name(),
-                        product.price(),
-                        product.stock(),
-                        productReviewSnippet(product)))
-                .reduce((left, right) -> left + " | " + right)
-                .orElse("无");
-    }
-
-    private String productReviewSnippet(ProductResponse product) {
-        long reviewCount = product.reviewCount() == null ? 0L : product.reviewCount();
-        if (reviewCount <= 0) {
-            return "";
-        }
-        String rating = product.averageRating() == null ? "暂无评分" : product.averageRating() + "星";
-        String summary = product.reviewSummary() == null || product.reviewSummary().isBlank()
-                ? ""
-                : "，口碑：" + trim(product.reviewSummary(), 60);
-        return "，评分%s，评价%s条%s".formatted(rating, reviewCount, summary);
-    }
-
-    private String formatOrders(List<OrderResponse> orders) {
-        return orders.stream()
-                .map(order -> {
-                    String latest = (order.timeline() == null || order.timeline().isEmpty())
-                            ? ""
-                            : ", " + order.timeline().get(order.timeline().size() - 1).title();
-                    String afterSales = order.afterSales() == null ? "" : ", 售后" + afterSalesStatusLabel(order.afterSales().status());
-                    String payment = order.paidAt() == null ? "" : ", 已支付";
-                    String invoice = order.invoice() == null ? "" : ", 发票" + invoiceStatusLabel(order.invoice().status());
-                    String promotion = hasDiscount(order)
-                            ? ", 优惠" + order.discountAmount() + (defaultText(order.promotionTitle(), order.promotionCode()) == null ? "" : ", 活动" + defaultText(order.promotionTitle(), order.promotionCode()))
-                            : "";
-                    return "%s[%s, %s%s%s%s%s%s]".formatted(order.orderNo(), statusLabel(order.status()), order.totalAmount(), promotion, payment, invoice, latest, afterSales);
-                })
-                .reduce((left, right) -> left + " | " + right)
-                .orElse("无");
-    }
-
-    private boolean hasDiscount(OrderResponse order) {
-        return order != null
-                && order.discountAmount() != null
-                && order.discountAmount().compareTo(BigDecimal.ZERO) > 0;
-    }
-
-    private String afterSalesStatusLabel(String status) {
-        return switch (status) {
-            case "REQUESTED" -> "等待平台审核";
-            case "AWAITING_CUSTOMER_RETURN" -> "等待用户回寄";
-            case "RETURN_SHIPPED" -> "用户已回寄";
-            case "REFUNDED" -> "售后已完成";
-            case "REJECTED" -> "售后已驳回";
-            default -> "售后处理中";
-        };
-    }
-
-    private String invoiceStatusLabel(String status) {
-        return switch (status) {
-            case "REQUESTED" -> "待开票";
-            case "ISSUED" -> "已开票";
-            case "REJECTED" -> "已驳回";
-            default -> "处理中";
-        };
-    }
-
-    private String defaultText(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value;
-    }
-
-    private record ActionExecution(String answer, String intent) {}
 }

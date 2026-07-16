@@ -45,6 +45,16 @@ public class RagAnswerComposer {
 
     public RagAnswerResult compose(String question) {
         KnowledgeRetrievalResult retrieval = knowledgeService.retrieve(question);
+        return compose(question, retrieval);
+    }
+
+    public RagAnswerResult compose(String question, KnowledgeRetrievalResult retrieval) {
+        if (question == null || question.isBlank()) {
+            throw new IllegalArgumentException("question 不能为空");
+        }
+        if (retrieval == null) {
+            throw new IllegalArgumentException("retrieval 不能为空");
+        }
         if (!retrieval.hasReliableEvidence()) {
             return result(NO_EVIDENCE_ANSWER, RagAnswerMode.NO_EVIDENCE, false,
                     List.of(), retrieval, null);
