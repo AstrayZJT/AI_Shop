@@ -6,6 +6,7 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 
 import com.aishop.assistant.model.AssistantAction;
+import com.aishop.assistant.guardrail.ActionPolicyRegistry;
 import com.aishop.assistant.tool.ToolExecutionOutcome;
 import com.aishop.domain.AppUser;
 import com.aishop.service.OrderService;
@@ -14,14 +15,18 @@ import com.aishop.service.OrderService;
 public class ConfirmedActionExecutor {
 
     private final OrderService orderService;
+    private final ActionPolicyRegistry actionPolicyRegistry;
 
-    public ConfirmedActionExecutor(OrderService orderService) {
+    public ConfirmedActionExecutor(OrderService orderService,
+                                   ActionPolicyRegistry actionPolicyRegistry) {
         this.orderService = orderService;
+        this.actionPolicyRegistry = actionPolicyRegistry;
     }
 
     public ToolExecutionOutcome execute(AppUser user,
                                         AssistantAction action,
                                         Map<String, Object> arguments) {
+        actionPolicyRegistry.requireConfirmationExecution(action);
         if (action != AssistantAction.CANCEL_ORDER) {
             throw new IllegalArgumentException("当前阶段只支持确认取消订单");
         }

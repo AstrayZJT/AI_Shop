@@ -2,6 +2,11 @@ package com.aishop.dto;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 public final class AssistantDtos {
     private AssistantDtos() {
@@ -64,4 +69,31 @@ public final class AssistantDtos {
                                         long indexedSegmentCount,
                                         List<String> warnings) {}
     public record EscalateSessionRequest(String note) {}
+
+    public record ConfirmPendingActionRequest(
+            @NotBlank
+            @Size(min = 8, max = 64)
+            @Pattern(regexp = "[A-Za-z0-9._:-]+")
+            String clientRequestId) {}
+
+    public record PendingActionResponse(Long id,
+                                        Long sessionId,
+                                        Long planRunId,
+                                        String taskId,
+                                        String action,
+                                        String status,
+                                        String targetRef,
+                                        Map<String, Object> preview,
+                                        Instant expiresAt,
+                                        Instant confirmedAt,
+                                        Instant executedAt,
+                                        Instant rejectedAt,
+                                        String clientRequestId,
+                                        String resultMessage,
+                                        Instant createdAt) {}
+
+    public record PendingActionOperationResponse(PendingActionResponse pendingAction,
+                                                 Long planRunId,
+                                                 String runStatus,
+                                                 boolean idempotentReplay) {}
 }

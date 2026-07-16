@@ -10,13 +10,14 @@
 
 ## AI Agent 重写进度
 
-面向 Agent 学习和面试讲解的新链路已完成五个阶段：
+面向 Agent 学习和面试讲解的新链路已完成六个阶段：
 
 - 第一阶段：真实 LLM 结构化 Planner、规则降级、计划校验和语义安全检查。
 - 第二阶段：LangChain4j Function Calling、Tool Registry、四个只读 Tool、取消订单无副作用 prepare，以及多任务工具编排。
 - 第三阶段：可配置切块、pgvector、关键词与向量混合召回、严格 JSON AnswerComposer、citation 校验和 RAG 离线评测。
 - 第四阶段：有预算的会话上下文、可信订单事实分层、跨轮订单指代、Planner 参数二次约束、Tool/RAG 结构化回答合成，并接入正式聊天入口。
 - 第五阶段：多任务拓扑排序与冲突分析、白名单条件求值、PlanRun/TaskRun/PendingAction 持久化状态机、缺槽位恢复，以及取消订单二次确认、拒绝和过期处理。
+- 第六阶段：后端 ActionPolicyRegistry、显式 PendingAction 查询/确认/拒绝 API、clientRequestId 幂等、数据库行锁并发保护、执行审计，以及 Prompt Injection 和跨用户越权防护。
 
 第二阶段提供三个登录后调试接口：
 
@@ -28,9 +29,20 @@ POST /api/assistant/tools/function-call-preview
 
 当前模型可以选择商品、订单、物流和知识库查询工具；Java 后端负责工具白名单、参数校验、用户归属和风险策略。取消订单工具本身仍只返回 `PREPARED`，正式聊天链路会创建 PendingAction；用户下一轮明确确认后，状态机重新校验订单归属和实时状态，再通过固定后端执行器完成取消。
 
+第六阶段新增四个登录后接口：
+
+```text
+GET  /api/assistant/pending-actions
+GET  /api/assistant/sessions/{sessionId}/pending-actions/{pendingActionId}
+POST /api/assistant/sessions/{sessionId}/pending-actions/{pendingActionId}/confirm
+POST /api/assistant/sessions/{sessionId}/pending-actions/{pendingActionId}/reject
+```
+
+确认接口必须携带 8 到 64 位 `clientRequestId`。后端在同一事务中锁定 PendingAction，校验当前用户、会话、PlanRun 当前任务、动作策略和有效期，再从数据库恢复服务端参数；取消订单前还会通过当前用户重新查询订单并校验实时状态。相同幂等键重试返回已保存结果，不重复修改订单；不同幂等键重复确认返回 `409`；跨用户确认返回 `403`。
+
 第三阶段真实环境的 5 条固定检索评测均排在第一位，Hit@K 和 MRR 均为 1.0。详细链路参见 `docs/AI Agent第三阶段RAG学习总结.md`。
 
-当前完整自动化测试为 114 条。
+当前完整自动化测试为 126 条。
 
 ## 1. 当前架构
 
@@ -563,15 +575,14 @@ mvn --% spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 - 查询具体订单状态、物流、地址、最新履约进度
 - 读取最新物流节点并结合订单状态解释下一步
 - 查询待支付订单和支付状态
-- 直接代办模拟支付
+- 查询支付状态并提供确定性业务指引；新 Agent 链路暂不开放自动支付
 - 查询退款 / 售后进度与回寄物流状态
 - 生成下单草稿
 - 确认草稿生成正式订单
 - 取消草稿
-- 直接代办取消订单
-- 直接代办确认收货
-- 直接代办申请退款
-- 直接代办修改发货前订单地址
+- 取消订单先生成 PendingAction，经二次确认、归属与实时状态复核后执行
+- PendingAction 支持显式查询、确认、拒绝、过期、幂等重放和并发重复确认保护
+- 支付、退款、确认收货、改地址等高风险 action 可被 Planner 识别，但当前 Agent 执行策略默认关闭
 - 查询当前优惠活动、优惠码、满减门槛和预计优惠
 - 查询知识库中的售后、物流、政策内容
 - 在客户端展示知识命中来源卡片和下一步建议动作

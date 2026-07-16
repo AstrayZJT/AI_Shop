@@ -7,5 +7,14 @@ public record StateMachineExecution(
         AgentRunStatus status,
         Long pendingActionId,
         boolean resumed,
-        ToolPlanExecutionResult execution) {
+        ToolPlanExecutionResult execution,
+        boolean idempotentReplay) {
+
+    public StateMachineExecution(Long planRunId,
+                                 AgentRunStatus status,
+                                 Long pendingActionId,
+                                 boolean resumed,
+                                 ToolPlanExecutionResult execution) {
+        this(planRunId, status, pendingActionId, resumed, execution, false);
+    }
 }

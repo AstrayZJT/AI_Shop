@@ -23,9 +23,14 @@ import jakarta.persistence.Version;
         indexes = @Index(
                 name = "idx_pending_assistant_action_expiry",
                 columnList = "status,expires_at"),
-        uniqueConstraints = @UniqueConstraint(
-                name = "uk_pending_assistant_action_task",
-                columnNames = "task_run_id"))
+        uniqueConstraints = {
+                @UniqueConstraint(
+                        name = "uk_pending_assistant_action_task",
+                        columnNames = "task_run_id"),
+                @UniqueConstraint(
+                        name = "uk_pending_assistant_action_request",
+                        columnNames = "client_request_id")
+        })
 public class PendingAssistantAction extends BaseEntity {
 
     @ManyToOne(optional = false, fetch = FetchType.LAZY)
@@ -69,6 +74,16 @@ public class PendingAssistantAction extends BaseEntity {
     private Instant executedAt;
 
     private Instant rejectedAt;
+
+    @Column(name = "client_request_id", length = 64)
+    private String clientRequestId;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "confirmed_by_user_id")
+    private AppUser confirmedByUser;
+
+    @Column(columnDefinition = "text")
+    private String resultJson;
 
     @Column(length = 1000)
     private String resultMessage;
@@ -186,6 +201,30 @@ public class PendingAssistantAction extends BaseEntity {
 
     public void setResultMessage(String resultMessage) {
         this.resultMessage = resultMessage;
+    }
+
+    public String getClientRequestId() {
+        return clientRequestId;
+    }
+
+    public void setClientRequestId(String clientRequestId) {
+        this.clientRequestId = clientRequestId;
+    }
+
+    public AppUser getConfirmedByUser() {
+        return confirmedByUser;
+    }
+
+    public void setConfirmedByUser(AppUser confirmedByUser) {
+        this.confirmedByUser = confirmedByUser;
+    }
+
+    public String getResultJson() {
+        return resultJson;
+    }
+
+    public void setResultJson(String resultJson) {
+        this.resultJson = resultJson;
     }
 
     public Long getVersion() {

@@ -76,7 +76,7 @@ public class OrderService {
         return toResponse(order);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
     public OrderResponse findByOrderNo(AppUser user, String orderNo) {
         if (orderNo == null || orderNo.isBlank()) {
             return null;
@@ -241,7 +241,7 @@ public class OrderService {
         return cancelOrder(user, id, note, "用户");
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
     public OrderResponse cancelOrder(AppUser user, Long id, String note, String actorLabel) {
         ShopOrder order = requireOwnedOrder(user, id);
         if (!(order.getStatus() == OrderStatus.PENDING_PAYMENT

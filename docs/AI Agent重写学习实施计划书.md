@@ -14,6 +14,8 @@
 
 本轮第五阶段多任务编排与状态机已于 2026-07-16 完成：实现 TaskSorter、TaskConflictAnalyzer、ConditionEvaluator，以及基于 AssistantPlanRun、AssistantTaskRun、PendingAssistantAction 的持久化 start/resume 状态机；正式聊天支持缺订单号补充、取消订单二次确认、用户拒绝、等待过期和服务重启恢复。完整测试共 114 条。
 
+本轮第六阶段 Agent Guardrails 已于 2026-07-16 完成，对应本文“阶段七”：实现后端 ActionPolicyRegistry、PendingAction 查询/确认/拒绝 API、clientRequestId 幂等、`PESSIMISTIC_WRITE` 并发确认保护和统一动作审计；确认时强制复核当前用户、会话、PlanRun 当前任务、动作有效期、订单归属与实时状态。Planner 不可信输入边界升级至 `planner-v1.4`，并补充闭合标签注入、模型伪造订单号、RAG citation 白名单及跨用户攻击测试。完整测试共 126 条。
+
 详细结果参见：
 
 - `docs/AI Agent第一阶段学习总结.md`
@@ -22,8 +24,10 @@
 - `docs/AI Agent第二阶段真实环境验收报告.md`
 - `docs/AI Agent第三阶段RAG学习总结.md`
 - `docs/AI Agent第三阶段RAG真实环境验收报告.md`
+- `docs/第五阶段多任务编排与状态机源码学习文档.md`
+- `docs/第六阶段Agent Guardrails源码学习文档.md`
 
-当前尚未实现 PendingAction 持久化、确认后恢复和真实取消订单，也尚未把新 Agent 链路接入正式 `/api/assistant/chat`。
+当前 Planner、Tool、RAG、上下文、持久化状态机和取消订单 Guardrails 已接入正式 `/api/assistant/chat`。尚未投入的是支付、退款、确认收货和改地址等其他写动作的确认执行器，以及完整 Agent 评测与链路观测阶段。
 
 ## 1. 项目重新定位
 
@@ -426,6 +430,8 @@ EXPIRED
 
 ### 5.7 阶段七：实现安全确认和 Agent Guardrails
 
+> 状态：已于 2026-07-16 完成，对应本轮 Goal 的“第六阶段”。
+
 #### 要做的事情
 
 1. 后端 `ActionPolicyRegistry` 固定每个 action 的风险等级。
@@ -452,6 +458,10 @@ EXPIRED
 - 即使模型选错 action，也不能越过后端策略。
 - 即使用户知道他人订单号，也不能查询或取消。
 - 过期、重复、并发确认都不会重复修改订单。
+- 相同 `clientRequestId` 并发确认时，第二个事务等待行锁并在首个事务提交后返回持久化结果，业务执行器只调用一次。
+- 跨用户 HTTP 确认返回 `403`，PendingAction 和订单状态均保持不变。
+- H2 正式 HTTP 链路完成 `PENDING_PAYMENT -> PENDING -> EXECUTED -> CANCELLED`，相同幂等键重放标记为 `idempotentReplay=true`，订单取消时间线只有一条。
+- 完整自动化测试 126 条全部通过。
 
 ### 5.8 阶段八：评测、可观测性和面试材料
 

@@ -12,6 +12,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 import com.aishop.assistant.model.AssistantAction;
+import com.aishop.assistant.guardrail.ActionPolicyRegistry;
 import com.aishop.domain.AppUser;
 import com.aishop.dto.OrderDtos.OrderResponse;
 import com.aishop.service.OrderService;
@@ -21,7 +22,8 @@ class ConfirmedActionExecutorTest {
     @Test
     void rechecksOrderByCurrentUserAndUsesFreshOrderIdBeforeCancel() {
         OrderService orderService = mock(OrderService.class);
-        ConfirmedActionExecutor executor = new ConfirmedActionExecutor(orderService);
+        ConfirmedActionExecutor executor = new ConfirmedActionExecutor(
+                orderService, new ActionPolicyRegistry());
         AppUser user = new AppUser();
         user.setId(1L);
         OrderResponse current = order(88L, "ORD-12345678", "PENDING_PAYMENT");

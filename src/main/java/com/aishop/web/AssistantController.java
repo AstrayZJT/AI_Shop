@@ -10,17 +10,23 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.aishop.dto.AssistantDtos.ChatRequest;
 import com.aishop.dto.AssistantDtos.ChatResponse;
+import com.aishop.dto.AssistantDtos.ConfirmPendingActionRequest;
 import com.aishop.dto.AssistantDtos.CreateSessionResponse;
 import com.aishop.dto.AssistantDtos.EscalateSessionRequest;
 import com.aishop.dto.AssistantDtos.MessageResponse;
+import com.aishop.dto.AssistantDtos.PendingActionOperationResponse;
+import com.aishop.dto.AssistantDtos.PendingActionResponse;
 import com.aishop.dto.AssistantDtos.RuntimeHealthResponse;
 import com.aishop.dto.AssistantDtos.SessionResponse;
 import com.aishop.domain.AssistantSession;
 import com.aishop.service.AssistantRuntimeStatusService;
+import com.aishop.service.AssistantPendingActionService;
 import com.aishop.service.AssistantService;
 import com.aishop.service.AuthService;
+import com.aishop.assistant.state.AssistantStateMachine;
 
 import jakarta.servlet.http.HttpSession;
+import jakarta.validation.Valid;
 
 @RestController
 public class AssistantController {
@@ -28,13 +34,19 @@ public class AssistantController {
     private final AuthService authService;
     private final AssistantService assistantService;
     private final AssistantRuntimeStatusService assistantRuntimeStatusService;
+    private final AssistantPendingActionService pendingActionService;
+    private final AssistantStateMachine stateMachine;
 
     public AssistantController(AuthService authService,
                                AssistantService assistantService,
-                               AssistantRuntimeStatusService assistantRuntimeStatusService) {
+                               AssistantRuntimeStatusService assistantRuntimeStatusService,
+                               AssistantPendingActionService pendingActionService,
+                               AssistantStateMachine stateMachine) {
         this.authService = authService;
         this.assistantService = assistantService;
         this.assistantRuntimeStatusService = assistantRuntimeStatusService;
+        this.pendingActionService = pendingActionService;
+        this.stateMachine = stateMachine;
     }
 
     @GetMapping("/api/assistant/health")
@@ -92,6 +104,45 @@ public class AssistantController {
         return assistantService.messages(id, user).stream()
                 .map(m -> new MessageResponse(m.getRole(), m.getContent(), m.getCreatedAt()))
                 .toList();
+    }
+
+    @GetMapping("/api/assistant/pending-actions")
+    public List<PendingActionResponse> pendingActions(HttpSession session) {
+        return pendingActionService.list(authService.requireUser(session));
+    }
+
+    @GetMapping("/api/assistant/sessions/{sessionId}/pending-actions/{pendingActionId}")
+    public PendingActionResponse pendingAction(@PathVariable Long sessionId,
+                                               @PathVariable Long pendingActionId,
+                                               HttpSession session) {
+        return pendingActionService.get(
+                authService.requireUser(session), sessionId, pendingActionId);
+    }
+
+    @PostMapping("/api/assistant/sessions/{sessionId}/pending-actions/{pendingActionId}/confirm")
+    public PendingActionOperationResponse confirmPendingAction(
+            @PathVariable Long sessionId,
+            @PathVariable Long pendingActionId,
+            @Valid @RequestBody ConfirmPendingActionRequest request,
+            HttpSession session) {
+        var user = authService.requireUser(session);
+        var execution = stateMachine.confirmPendingAction(
+                user, sessionId, pendingActionId, request.clientRequestId());
+        return new PendingActionOperationResponse(
+                pendingActionService.get(user, sessionId, pendingActionId),
+                execution.planRunId(), execution.status().name(), execution.idempotentReplay());
+    }
+
+    @PostMapping("/api/assistant/sessions/{sessionId}/pending-actions/{pendingActionId}/reject")
+    public PendingActionOperationResponse rejectPendingAction(
+            @PathVariable Long sessionId,
+            @PathVariable Long pendingActionId,
+            HttpSession session) {
+        var user = authService.requireUser(session);
+        var execution = stateMachine.rejectPendingAction(user, sessionId, pendingActionId);
+        return new PendingActionOperationResponse(
+                pendingActionService.get(user, sessionId, pendingActionId),
+                execution.planRunId(), execution.status().name(), execution.idempotentReplay());
     }
 
     private SessionResponse toSessionResponse(AssistantSession session) {

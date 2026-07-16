@@ -1,6 +1,7 @@
 package com.aishop.repository;
 
 import java.util.Optional;
+import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -22,9 +23,19 @@ public interface PendingAssistantActionRepository extends JpaRepository<PendingA
             AssistantPlanRun planRun,
             PendingActionStatus status);
 
+    List<PendingAssistantAction> findTop20ByUserOrderByCreatedAtDesc(AppUser user);
+
+    Optional<PendingAssistantAction> findByIdAndUser(Long id, AppUser user);
+
+    Optional<PendingAssistantAction> findByClientRequestId(String clientRequestId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select action from PendingAssistantAction action where action.id = :id and action.user = :user")
     Optional<PendingAssistantAction> findOwnedByIdForUpdate(
             @Param("id") Long id,
             @Param("user") AppUser user);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select action from PendingAssistantAction action where action.id = :id")
+    Optional<PendingAssistantAction> findByIdForUpdate(@Param("id") Long id);
 }

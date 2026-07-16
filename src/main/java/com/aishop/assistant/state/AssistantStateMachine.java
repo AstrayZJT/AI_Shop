@@ -6,11 +6,18 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.aishop.assistant.model.AssistantPlan;
+import com.aishop.assistant.guardrail.ActionPolicyRegistry;
+import com.aishop.assistant.guardrail.ActionAuditEvent;
+import com.aishop.assistant.guardrail.ActionAuditService;
+import com.aishop.assistant.guardrail.AgentAccessDeniedException;
+import com.aishop.assistant.guardrail.AgentConflictException;
+import com.aishop.assistant.guardrail.AgentResourceNotFoundException;
 import com.aishop.assistant.model.AssistantTask;
 import com.aishop.assistant.model.ExecutionMode;
 import com.aishop.assistant.model.PlannerResult;
@@ -60,6 +67,8 @@ public class AssistantStateMachine {
     private final AgentStateCodec codec;
     private final PlanValidator planValidator;
     private final AssistantStateProperties properties;
+    private final ActionPolicyRegistry actionPolicyRegistry;
+    private final ActionAuditService actionAuditService;
 
     public AssistantStateMachine(AssistantPlanRunRepository planRunRepository,
                                  AssistantTaskRunRepository taskRunRepository,
@@ -73,7 +82,9 @@ public class AssistantStateMachine {
                                  ConfirmedActionExecutor confirmedActionExecutor,
                                  AgentStateCodec codec,
                                  PlanValidator planValidator,
-                                 AssistantStateProperties properties) {
+                                 AssistantStateProperties properties,
+                                 ActionPolicyRegistry actionPolicyRegistry,
+                                 ActionAuditService actionAuditService) {
         this.planRunRepository = planRunRepository;
         this.taskRunRepository = taskRunRepository;
         this.pendingActionRepository = pendingActionRepository;
@@ -87,6 +98,8 @@ public class AssistantStateMachine {
         this.codec = codec;
         this.planValidator = planValidator;
         this.properties = properties;
+        this.actionPolicyRegistry = actionPolicyRegistry;
+        this.actionAuditService = actionAuditService;
     }
 
     @Transactional(readOnly = true)
@@ -137,6 +150,68 @@ public class AssistantStateMachine {
         };
     }
 
+    @Transactional(noRollbackFor = {
+            AgentAccessDeniedException.class,
+            AgentConflictException.class
+    })
+    public StateMachineExecution confirmPendingAction(AppUser user,
+                                                      Long sessionId,
+                                                      Long pendingActionId,
+                                                      String clientRequestId) {
+        String requestId = normalizeClientRequestId(clientRequestId);
+        PendingAssistantAction pending = loadAndAuthorizeForUpdate(
+                user, sessionId, pendingActionId, requestId);
+        AssistantPlanRun planRun = pending.getPlanRun();
+        AssistantTaskRun taskRun = pending.getTaskRun();
+        PlannerResult plannerResult = plannerResult(planRun);
+
+        pendingActionRepository.findByClientRequestId(requestId)
+                .filter(existing -> !existing.getId().equals(pending.getId()))
+                .ifPresent(existing -> {
+                    deny(pending, user, requestId, "clientRequestId 已用于其他待确认动作");
+                    throw new AgentConflictException("clientRequestId 已被使用");
+                });
+
+        if (pending.getClientRequestId() != null) {
+            if (pending.getClientRequestId().equals(requestId)) {
+                actionAuditService.record(
+                        pending, ActionAuditEvent.IDEMPOTENT_REPLAY, user, requestId,
+                        pending.getStatus().name(), "相同 clientRequestId 重试，返回已保存结果");
+                return execution(planRun, plannerResult, pending.getId(), true, true);
+            }
+            deny(pending, user, requestId, "待确认动作已由其他请求处理");
+            throw new AgentConflictException("待确认动作已经处理，请勿使用新的 clientRequestId 重复确认");
+        }
+
+        requireWaitingConfirmation(pending, user, requestId);
+        if (pending.getExpiresAt().isBefore(Instant.now()) || isExpired(planRun)) {
+            return expire(planRun, taskRun, plannerResult);
+        }
+        return confirmAndContinue(user, planRun, taskRun, plannerResult, pending, requestId);
+    }
+
+    @Transactional(noRollbackFor = {
+            AgentAccessDeniedException.class,
+            AgentConflictException.class
+    })
+    public StateMachineExecution rejectPendingAction(AppUser user,
+                                                     Long sessionId,
+                                                     Long pendingActionId) {
+        PendingAssistantAction pending = loadAndAuthorizeForUpdate(
+                user, sessionId, pendingActionId, null);
+        AssistantPlanRun planRun = pending.getPlanRun();
+        AssistantTaskRun taskRun = pending.getTaskRun();
+        PlannerResult plannerResult = plannerResult(planRun);
+        if (pending.getStatus() == PendingActionStatus.REJECTED) {
+            return execution(planRun, plannerResult, pending.getId(), true, true);
+        }
+        requireWaitingConfirmation(pending, user, null);
+        if (pending.getExpiresAt().isBefore(Instant.now()) || isExpired(planRun)) {
+            return expire(planRun, taskRun, plannerResult);
+        }
+        return rejectAndContinue(user, planRun, taskRun, plannerResult, pending);
+    }
+
     private StateMachineExecution resumeInput(AssistantPlanRun planRun,
                                               AssistantTaskRun taskRun,
                                               PlannerResult plannerResult,
@@ -179,40 +254,36 @@ public class AssistantStateMachine {
             return execution(planRun, plannerResult, pending.getId(), true);
         }
         if (decision == ConfirmationDecision.REJECT) {
-            Instant now = Instant.now();
-            pending.setStatus(PendingActionStatus.REJECTED);
-            pending.setRejectedAt(now);
-            pending.setResultMessage("用户拒绝执行");
-            pendingActionRepository.save(pending);
-            AssistantTask task = codec.readTask(taskRun.getTaskJson());
-            TaskToolResult rejected = result(
-                    task, ToolExecutionStatus.REJECTED, pending.getTargetRef(), taskRun.getToolName(),
-                    Map.of("pendingActionId", pending.getId()), "用户已取消本次操作");
-            saveTaskResult(taskRun, AgentRunStatus.SKIPPED, rejected, true);
-            taskRunRepository.save(taskRun);
-            clearWait(planRun);
-            planRun.setStatus(AgentRunStatus.RUNNING);
-            planRunRepository.save(planRun);
-            return drive(planRun, plannerResult, true);
+            PendingAssistantAction locked = loadAndAuthorizeForUpdate(
+                    user, planRun.getSession().getId(), pending.getId(), null);
+            requireWaitingConfirmation(locked, user, null);
+            return rejectAndContinue(user, planRun, taskRun, plannerResult, locked);
         }
-        return confirmAndContinue(user, planRun, taskRun, plannerResult, pending);
+        PendingAssistantAction locked = loadAndAuthorizeForUpdate(
+                user, planRun.getSession().getId(), pending.getId(), null);
+        requireWaitingConfirmation(locked, user, null);
+        return confirmAndContinue(
+                user, planRun, taskRun, plannerResult, locked,
+                "chat-" + UUID.randomUUID());
     }
 
     private StateMachineExecution confirmAndContinue(AppUser user,
                                                      AssistantPlanRun planRun,
                                                      AssistantTaskRun taskRun,
                                                      PlannerResult plannerResult,
-                                                     PendingAssistantAction pendingCandidate) {
-        PendingAssistantAction pending = pendingActionRepository
-                .findOwnedByIdForUpdate(pendingCandidate.getId(), user)
-                .orElseThrow(() -> new IllegalArgumentException("待确认动作不存在或不属于当前用户"));
-        if (pending.getStatus() != PendingActionStatus.PENDING) {
-            throw new IllegalStateException("待确认动作已经处理: " + pending.getStatus());
-        }
-        if (pending.getExpiresAt().isBefore(Instant.now())) {
+                                                     PendingAssistantAction pending,
+                                                     String clientRequestId) {
+        if (pending.getExpiresAt().isBefore(Instant.now()) || isExpired(planRun)) {
             return expire(planRun, taskRun, plannerResult);
         }
-        pending.setConfirmedAt(Instant.now());
+        Instant confirmedAt = Instant.now();
+        pending.setClientRequestId(clientRequestId);
+        pending.setConfirmedByUser(user);
+        pending.setConfirmedAt(confirmedAt);
+        pendingActionRepository.save(pending);
+        actionAuditService.record(
+                pending, ActionAuditEvent.CONFIRMED, user, clientRequestId,
+                "ACCEPTED", "用户完成二次确认，准备重新校验并执行");
         AssistantTask task = codec.readTask(taskRun.getTaskJson());
         try {
             ToolExecutionOutcome outcome = confirmedActionExecutor.execute(
@@ -224,24 +295,59 @@ public class AssistantStateMachine {
             TaskToolResult succeeded = result(
                     task, ToolExecutionStatus.SUCCEEDED, pending.getTargetRef(), taskRun.getToolName(),
                     outcome.data(), outcome.message());
+            pending.setResultJson(codec.write(succeeded));
             saveTaskResult(taskRun, AgentRunStatus.SUCCEEDED, succeeded, true);
             taskRunRepository.save(taskRun);
+            actionAuditService.record(
+                    pending, ActionAuditEvent.EXECUTED, user, clientRequestId,
+                    "SUCCEEDED", outcome.message());
             clearWait(planRun);
             planRun.setStatus(AgentRunStatus.RUNNING);
             planRunRepository.save(planRun);
             return drive(planRun, plannerResult, true);
-        } catch (RuntimeException ex) {
+        } catch (IllegalArgumentException ex) {
             pending.setStatus(PendingActionStatus.FAILED);
             pending.setResultMessage(safeMessage(ex));
             pendingActionRepository.save(pending);
             TaskToolResult failed = result(
                     task, ToolExecutionStatus.FAILED, pending.getTargetRef(), taskRun.getToolName(),
                     Map.of("pendingActionId", pending.getId()), safeMessage(ex));
+            pending.setResultJson(codec.write(failed));
+            pendingActionRepository.save(pending);
             saveTaskResult(taskRun, AgentRunStatus.FAILED, failed, true);
             taskRunRepository.save(taskRun);
+            actionAuditService.record(
+                    pending, ActionAuditEvent.FAILED, user, clientRequestId,
+                    "FAILED", safeMessage(ex));
             failPlan(planRun, safeMessage(ex));
             return execution(planRun, plannerResult, pending.getId(), true);
         }
+    }
+
+    private StateMachineExecution rejectAndContinue(AppUser user,
+                                                     AssistantPlanRun planRun,
+                                                     AssistantTaskRun taskRun,
+                                                     PlannerResult plannerResult,
+                                                     PendingAssistantAction pending) {
+        Instant now = Instant.now();
+        pending.setStatus(PendingActionStatus.REJECTED);
+        pending.setRejectedAt(now);
+        pending.setResultMessage("用户拒绝执行");
+        AssistantTask task = codec.readTask(taskRun.getTaskJson());
+        TaskToolResult rejected = result(
+                task, ToolExecutionStatus.REJECTED, pending.getTargetRef(), taskRun.getToolName(),
+                Map.of("pendingActionId", pending.getId()), "用户已取消本次操作");
+        pending.setResultJson(codec.write(rejected));
+        pendingActionRepository.save(pending);
+        actionAuditService.record(
+                pending, ActionAuditEvent.REJECTED, user, null,
+                "REJECTED", "用户拒绝执行待确认动作");
+        saveTaskResult(taskRun, AgentRunStatus.SKIPPED, rejected, true);
+        taskRunRepository.save(taskRun);
+        clearWait(planRun);
+        planRun.setStatus(AgentRunStatus.RUNNING);
+        planRunRepository.save(planRun);
+        return drive(planRun, plannerResult, true);
     }
 
     private StateMachineExecution drive(AssistantPlanRun planRun,
@@ -301,6 +407,7 @@ public class AssistantStateMachine {
             taskRunRepository.save(taskRun);
             TaskToolResult result = toolOrchestrator.executeTask(
                     new ToolContext(planRun.getUser(), "plan-run-" + planRun.getId()), task);
+            actionPolicyRegistry.validateToolResult(task.action(), result.status());
             if (result.status() == ToolExecutionStatus.PREPARED) {
                 PendingAssistantAction pending = createPendingAction(planRun, taskRun, result);
                 TaskToolResult waiting = withPendingMetadata(result, pending);
@@ -333,6 +440,7 @@ public class AssistantStateMachine {
         if (result.targetRef() == null || result.targetRef().isBlank()) {
             throw new IllegalArgumentException("高风险动作缺少可审计目标");
         }
+        actionPolicyRegistry.requireConfirmationExecution(result.action());
         PendingAssistantAction pending = new PendingAssistantAction();
         pending.setPlanRun(planRun);
         pending.setTaskRun(taskRun);
@@ -344,7 +452,11 @@ public class AssistantStateMachine {
         pending.setArgumentsJson(codec.write(result.arguments()));
         pending.setPreviewJson(codec.write(result.data()));
         pending.setExpiresAt(Instant.now().plus(properties.confirmationTtl()));
-        return pendingActionRepository.save(pending);
+        PendingAssistantAction saved = pendingActionRepository.save(pending);
+        actionAuditService.record(
+                saved, ActionAuditEvent.PREPARED, null, null,
+                "PENDING", "高风险动作已准备，等待用户确认");
+        return saved;
     }
 
     private TaskToolResult withPendingMetadata(TaskToolResult result, PendingAssistantAction pending) {
@@ -365,6 +477,9 @@ public class AssistantStateMachine {
                 pending.setStatus(PendingActionStatus.EXPIRED);
                 pending.setResultMessage("待确认动作已过期");
                 pendingActionRepository.save(pending);
+                actionAuditService.record(
+                        pending, ActionAuditEvent.EXPIRED, null, pending.getClientRequestId(),
+                        "EXPIRED", "待确认动作超过有效期，未执行业务写操作");
             }
         });
         AssistantTask task = codec.readTask(taskRun.getTaskJson());
@@ -441,7 +556,72 @@ public class AssistantStateMachine {
                 .toList();
         return new StateMachineExecution(
                 planRun.getId(), planRun.getStatus(), pendingActionId, resumed,
-                new ToolPlanExecutionResult(plannerResult, results));
+                new ToolPlanExecutionResult(plannerResult, results), false);
+    }
+
+    private StateMachineExecution execution(AssistantPlanRun planRun,
+                                            PlannerResult plannerResult,
+                                            Long pendingActionId,
+                                            boolean resumed,
+                                            boolean idempotentReplay) {
+        StateMachineExecution execution = execution(planRun, plannerResult, pendingActionId, resumed);
+        return new StateMachineExecution(
+                execution.planRunId(), execution.status(), execution.pendingActionId(),
+                execution.resumed(), execution.execution(), idempotentReplay);
+    }
+
+    private PendingAssistantAction loadAndAuthorizeForUpdate(AppUser user,
+                                                             Long sessionId,
+                                                             Long pendingActionId,
+                                                             String clientRequestId) {
+        PendingAssistantAction pending = pendingActionRepository.findByIdForUpdate(pendingActionId)
+                .orElseThrow(() -> new AgentResourceNotFoundException("待确认动作不存在"));
+        if (!sameId(pending.getUser(), user)) {
+            deny(pending, user, clientRequestId, "当前用户不是待确认动作所有者");
+            throw new AgentAccessDeniedException("无权操作其他用户的待确认动作");
+        }
+        if (sessionId == null || !pending.getSession().getId().equals(sessionId)) {
+            deny(pending, user, clientRequestId, "请求会话与待确认动作会话不一致");
+            throw new AgentAccessDeniedException("待确认动作与当前会话不匹配");
+        }
+        return pending;
+    }
+
+    private void requireWaitingConfirmation(PendingAssistantAction pending,
+                                            AppUser actor,
+                                            String clientRequestId) {
+        AssistantPlanRun planRun = pending.getPlanRun();
+        boolean taskMatches = planRun.getCurrentTaskId() != null
+                && planRun.getCurrentTaskId().equals(pending.getTaskRun().getTaskId());
+        if (pending.getStatus() != PendingActionStatus.PENDING
+                || planRun.getStatus() != AgentRunStatus.WAITING_CONFIRMATION
+                || !taskMatches) {
+            deny(pending, actor, clientRequestId, "PendingAction 与 PlanRun 当前状态不一致");
+            throw new AgentConflictException("待确认动作当前不可执行");
+        }
+        actionPolicyRegistry.requireConfirmationExecution(pending.getAction());
+    }
+
+    private void deny(PendingAssistantAction pending,
+                      AppUser actor,
+                      String clientRequestId,
+                      String detail) {
+        actionAuditService.record(
+                pending, ActionAuditEvent.DENIED, actor, clientRequestId,
+                "DENIED", detail);
+    }
+
+    private boolean sameId(AppUser left, AppUser right) {
+        return left != null && right != null && left.getId() != null
+                && left.getId().equals(right.getId());
+    }
+
+    private String normalizeClientRequestId(String value) {
+        if (value == null || !value.matches("[A-Za-z0-9._:-]{8,64}")) {
+            throw new IllegalArgumentException(
+                    "clientRequestId 必须为 8 到 64 位字母、数字、点、下划线、冒号或短横线");
+        }
+        return value;
     }
 
     private Map<String, TaskToolResult> storedResults(Map<String, AssistantTaskRun> runs) {
