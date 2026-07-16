@@ -893,10 +893,16 @@ mvn -q -DskipTests compile
 - AI Agent 重写学习实施计划书：`docs/AI Agent重写学习实施计划书.md`
 - AI Agent 第一阶段学习总结：`docs/AI Agent第一阶段学习总结.md`
 - AI Agent 第一阶段真实环境验收报告：`docs/AI Agent第一阶段真实环境验收报告.md`
+- AI Agent 第一阶段 Planner 源码讲解：`docs/AI Agent第一阶段Planner源码讲解.md`
+- 第一阶段学习记录：`docs/第一阶段学习记录.md`
+- 第二阶段 Tool Calling 源码学习文档：`docs/第二阶段Tool Calling源码学习文档.md`
+- 第二阶段学习记录：`docs/第二阶段学习记录.md`
 - AI Agent 第二阶段学习总结：`docs/AI Agent第二阶段学习总结.md`
 - AI Agent 第二阶段真实环境验收报告：`docs/AI Agent第二阶段真实环境验收报告.md`
 - AI Agent 第三阶段 RAG 学习总结：`docs/AI Agent第三阶段RAG学习总结.md`
 - AI Agent 第三阶段 RAG 真实环境验收报告：`docs/AI Agent第三阶段RAG真实环境验收报告.md`
+- 第三阶段 RAG 源码学习文档：`docs/第三阶段RAG源码学习文档.md`
+- 第三阶段学习记录：`docs/第三阶段学习记录.md`
 
 ## 15. 当前边界与未完成项
 
