@@ -6,5 +6,7 @@ public enum ToolExecutionStatus {
     NEEDS_INPUT,
     NOT_SUPPORTED,
     FAILED,
-    SKIPPED_DEPENDENCY
+    SKIPPED_DEPENDENCY,
+    REJECTED,
+    EXPIRED
 }

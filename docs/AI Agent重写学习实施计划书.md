@@ -12,6 +12,8 @@
 
 本轮第四阶段上下文与回答合成链路已于 2026-07-16 完成：正式聊天入口统一接入 Context、Planner、Tool、RAG 和 AnswerComposer；实现固定上下文预算、会话摘要上限、可信订单事实分层、跨轮订单指代、模型订单号二次约束和 Tool/RAG 结构复用。旧的关键词路由和直接订单动作聊天路径已移除，完整测试共 101 条。
 
+本轮第五阶段多任务编排与状态机已于 2026-07-16 完成：实现 TaskSorter、TaskConflictAnalyzer、ConditionEvaluator，以及基于 AssistantPlanRun、AssistantTaskRun、PendingAssistantAction 的持久化 start/resume 状态机；正式聊天支持缺订单号补充、取消订单二次确认、用户拒绝、等待过期和服务重启恢复。完整测试共 114 条。
+
 详细结果参见：
 
 - `docs/AI Agent第一阶段学习总结.md`
@@ -377,6 +379,8 @@ public interface AssistantTool {
 
 ### 5.6 阶段六：实现多任务编排和状态机
 
+> 状态：已于 2026-07-16 完成，对应本轮 Goal 的“第五阶段”。
+
 #### 要做的事情
 
 1. 实现 `TaskSorter`，对 `dependsOn` 做拓扑排序。
@@ -415,6 +419,10 @@ EXPIRED
 - “查物流，如果未发货就取消”完整跑通。
 - 服务重启后仍能找到待确认动作。
 - 条件不满足时取消任务变为 `SKIPPED`，不会产生确认动作。
+- 缺订单号时进入 `WAITING_INPUT`，下一轮补充后从原任务恢复，不重新调用 Planner。
+- 取消订单进入 `WAITING_CONFIRMATION`，确认、拒绝和过期均有持久化状态。
+- 完整自动化测试 114 条全部通过。
+- H2 临时环境正式 HTTP 链路验收通过：取消请求先等待确认，确认后同一 PlanRun 恢复成功，订单由 `PENDING_PAYMENT` 变为 `CANCELLED`。
 
 ### 5.7 阶段七：实现安全确认和 Agent Guardrails
 

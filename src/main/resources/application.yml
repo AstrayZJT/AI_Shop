@@ -47,6 +47,9 @@ assistant:
     max-recent-messages: ${ASSISTANT_CONTEXT_MAX_RECENT_MESSAGES:6}
     max-message-characters: ${ASSISTANT_CONTEXT_MAX_MESSAGE_CHARACTERS:800}
     max-order-facts: ${ASSISTANT_CONTEXT_MAX_ORDER_FACTS:3}
+  state:
+    input-ttl: ${ASSISTANT_STATE_INPUT_TTL:30m}
+    confirmation-ttl: ${ASSISTANT_STATE_CONFIRMATION_TTL:10m}
 
 rag:
   knowledge-path: knowledge

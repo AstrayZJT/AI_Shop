@@ -125,9 +125,10 @@ public class AssistantService {
                     ? List.of()
                     : turn.ragAnswer().retrievalHits().stream().map(this::toKnowledgeSourceResponse).toList();
             log.info(
-                    "assistant agent response: sessionId={}, intent={}, plannerSource={}, taskCount={}, contextCharacters={}, contextTruncated={}, answerMode={}, sourceCount={}",
+                    "assistant agent response: sessionId={}, intent={}, plannerSource={}, taskCount={}, planRunId={}, runStatus={}, resumed={}, contextCharacters={}, contextTruncated={}, answerMode={}, sourceCount={}",
                     session.getId(), intent, turn.execution().planner().source(),
-                    turn.execution().taskResults().size(), turn.context().estimatedCharacters(),
+                    turn.execution().taskResults().size(), turn.workflow().planRunId(),
+                    turn.workflow().status(), turn.workflow().resumed(), turn.context().estimatedCharacters(),
                     turn.context().truncated(), turn.composedAnswer().mode(), sources.size());
         }
 

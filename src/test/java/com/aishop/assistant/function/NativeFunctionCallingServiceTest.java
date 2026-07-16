@@ -20,6 +20,7 @@ import com.aishop.assistant.tool.ToolExecutionOutcome;
 import com.aishop.assistant.tool.ToolExecutionStatus;
 import com.aishop.assistant.tool.ToolPolicy;
 import com.aishop.assistant.tool.ToolRiskLevel;
+import com.aishop.assistant.state.TaskSorter;
 import com.aishop.config.ShopProperties;
 import com.aishop.domain.AppUser;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -125,7 +126,7 @@ class NativeFunctionCallingServiceTest {
                         0.0),
                 new ShopProperties.Rag(4));
         AssistantToolRegistry registry = new AssistantToolRegistry(List.of(tool));
-        AssistantToolOrchestrator orchestrator = new AssistantToolOrchestrator(registry);
+        AssistantToolOrchestrator orchestrator = new AssistantToolOrchestrator(registry, new TaskSorter());
         ToolCallingModelGateway gateway = (message, tools) -> reply;
         return new NativeFunctionCallingService(
                 properties, gateway, registry, orchestrator, new ObjectMapper());

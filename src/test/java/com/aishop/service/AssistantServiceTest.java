@@ -31,6 +31,8 @@ import com.aishop.assistant.model.PlannerSource;
 import com.aishop.assistant.orchestration.ToolPlanExecutionResult;
 import com.aishop.assistant.tool.TaskToolResult;
 import com.aishop.assistant.tool.ToolExecutionStatus;
+import com.aishop.assistant.state.AgentRunStatus;
+import com.aishop.assistant.state.StateMachineExecution;
 import com.aishop.domain.AppUser;
 import com.aishop.domain.AssistantMessage;
 import com.aishop.domain.AssistantSession;
@@ -90,6 +92,7 @@ class AssistantServiceTest {
         ToolPlanExecutionResult execution = new ToolPlanExecutionResult(planner, List.of(result));
         return new AssistantAgentTurn(
                 context, execution, null,
-                new AssistantComposedAnswer("请补充订单号。", "STRUCTURED_EVIDENCE", List.of()));
+                new AssistantComposedAnswer("请补充订单号。", "STRUCTURED_EVIDENCE", List.of()),
+                new StateMachineExecution(1L, AgentRunStatus.WAITING_INPUT, null, false, execution));
     }
 }

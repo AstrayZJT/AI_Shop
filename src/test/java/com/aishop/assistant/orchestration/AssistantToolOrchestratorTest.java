@@ -24,6 +24,7 @@ import com.aishop.assistant.tool.ToolExecutionOutcome;
 import com.aishop.assistant.tool.ToolExecutionStatus;
 import com.aishop.assistant.tool.ToolPolicy;
 import com.aishop.assistant.tool.ToolRiskLevel;
+import com.aishop.assistant.state.TaskSorter;
 import com.aishop.domain.AppUser;
 
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -84,7 +85,8 @@ class AssistantToolOrchestratorTest {
 
     @Test
     void reportsUnsupportedAction() {
-        AssistantToolOrchestrator orchestrator = new AssistantToolOrchestrator(new AssistantToolRegistry(List.of()));
+        AssistantToolOrchestrator orchestrator = new AssistantToolOrchestrator(
+                new AssistantToolRegistry(List.of()), new TaskSorter());
 
         var result = orchestrator.executePlan(user(), planner(List.of(
                 task("t1", AssistantAction.GENERAL_CHAT, ExecutionMode.ANSWER_ONLY, Map.of(), List.of(), List.of()))));
@@ -93,7 +95,7 @@ class AssistantToolOrchestratorTest {
     }
 
     private AssistantToolOrchestrator orchestrator(AssistantTool tool) {
-        return new AssistantToolOrchestrator(new AssistantToolRegistry(List.of(tool)));
+        return new AssistantToolOrchestrator(new AssistantToolRegistry(List.of(tool)), new TaskSorter());
     }
 
     private PlannerResult planner(List<AssistantTask> tasks) {

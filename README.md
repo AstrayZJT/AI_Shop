@@ -10,12 +10,13 @@
 
 ## AI Agent 重写进度
 
-面向 Agent 学习和面试讲解的新链路已完成四个阶段：
+面向 Agent 学习和面试讲解的新链路已完成五个阶段：
 
 - 第一阶段：真实 LLM 结构化 Planner、规则降级、计划校验和语义安全检查。
 - 第二阶段：LangChain4j Function Calling、Tool Registry、四个只读 Tool、取消订单无副作用 prepare，以及多任务工具编排。
 - 第三阶段：可配置切块、pgvector、关键词与向量混合召回、严格 JSON AnswerComposer、citation 校验和 RAG 离线评测。
 - 第四阶段：有预算的会话上下文、可信订单事实分层、跨轮订单指代、Planner 参数二次约束、Tool/RAG 结构化回答合成，并接入正式聊天入口。
+- 第五阶段：多任务拓扑排序与冲突分析、白名单条件求值、PlanRun/TaskRun/PendingAction 持久化状态机、缺槽位恢复，以及取消订单二次确认、拒绝和过期处理。
 
 第二阶段提供三个登录后调试接口：
 
@@ -25,11 +26,11 @@ POST /api/assistant/tools/plan-preview
 POST /api/assistant/tools/function-call-preview
 ```
 
-当前模型可以选择商品、订单、物流和知识库查询工具；Java 后端负责工具白名单、参数校验、用户归属和风险策略。取消订单工具只返回 `PREPARED`，不会修改订单，后续阶段再实现 PendingAction 二次确认和跨请求恢复。
+当前模型可以选择商品、订单、物流和知识库查询工具；Java 后端负责工具白名单、参数校验、用户归属和风险策略。取消订单工具本身仍只返回 `PREPARED`，正式聊天链路会创建 PendingAction；用户下一轮明确确认后，状态机重新校验订单归属和实时状态，再通过固定后端执行器完成取消。
 
 第三阶段真实环境的 5 条固定检索评测均排在第一位，Hit@K 和 MRR 均为 1.0。详细链路参见 `docs/AI Agent第三阶段RAG学习总结.md`。
 
-当前完整自动化测试为 101 条。
+当前完整自动化测试为 114 条。
 
 ## 1. 当前架构
 
@@ -905,6 +906,7 @@ mvn -q -DskipTests compile
 - 第三阶段 RAG 源码学习文档：`docs/第三阶段RAG源码学习文档.md`
 - 第三阶段学习记录：`docs/第三阶段学习记录.md`
 - 第四阶段上下文、记忆与回答合成源码学习文档：`docs/第四阶段上下文记忆与回答合成源码学习文档.md`
+- 第五阶段多任务编排与状态机源码学习文档：`docs/第五阶段多任务编排与状态机源码学习文档.md`
 
 ## 15. 当前边界与未完成项
 

@@ -3,6 +3,7 @@ package com.aishop.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -23,7 +24,6 @@ import com.aishop.assistant.model.ExecutionMode;
 import com.aishop.assistant.model.PlanType;
 import com.aishop.assistant.model.PlannerResult;
 import com.aishop.assistant.model.PlannerSource;
-import com.aishop.assistant.orchestration.AssistantToolOrchestrator;
 import com.aishop.assistant.orchestration.ToolPlanExecutionResult;
 import com.aishop.assistant.planner.PlannerFacade;
 import com.aishop.assistant.rag.KnowledgeRetrievalResult;
@@ -32,6 +32,10 @@ import com.aishop.assistant.rag.RagAnswerMode;
 import com.aishop.assistant.rag.RagAnswerResult;
 import com.aishop.assistant.tool.TaskToolResult;
 import com.aishop.assistant.tool.ToolExecutionStatus;
+import com.aishop.assistant.state.AgentRunStatus;
+import com.aishop.assistant.state.AssistantStateMachine;
+import com.aishop.assistant.state.StateMachineExecution;
+import com.aishop.assistant.state.WaitingAgentRun;
 import com.aishop.domain.AppUser;
 import com.aishop.domain.AssistantSession;
 
@@ -42,11 +46,11 @@ class AssistantAgentServiceTest {
         AssistantContextBuilder contextBuilder = mock(AssistantContextBuilder.class);
         PlannerFacade plannerFacade = mock(PlannerFacade.class);
         ConversationPlanResolver resolver = mock(ConversationPlanResolver.class);
-        AssistantToolOrchestrator orchestrator = mock(AssistantToolOrchestrator.class);
         RagAnswerComposer ragComposer = mock(RagAnswerComposer.class);
         AssistantAnswerComposer answerComposer = mock(AssistantAnswerComposer.class);
+        AssistantStateMachine stateMachine = mock(AssistantStateMachine.class);
         AssistantAgentService service = new AssistantAgentService(
-                contextBuilder, plannerFacade, resolver, orchestrator, ragComposer, answerComposer);
+                contextBuilder, plannerFacade, resolver, ragComposer, answerComposer, stateMachine);
         AppUser user = new AppUser();
         user.setId(1L);
         AssistantSession session = new AssistantSession();
@@ -68,7 +72,9 @@ class AssistantAgentServiceTest {
         when(contextBuilder.build(user, session, "七天无理由怎么退货", null)).thenReturn(context);
         when(plannerFacade.plan(context.toPlannerInput())).thenReturn(planned);
         when(resolver.resolve(context, planned)).thenReturn(planned);
-        when(orchestrator.executePlan(user, planned)).thenReturn(execution);
+        when(stateMachine.findWaiting(user, session)).thenReturn(java.util.Optional.empty());
+        when(stateMachine.start(user, session, planned)).thenReturn(new StateMachineExecution(
+                1L, AgentRunStatus.SUCCEEDED, null, false, execution));
         when(ragComposer.compose("七天无理由怎么退货", retrieval)).thenReturn(ragAnswer);
         when(answerComposer.compose(context, execution, ragAnswer)).thenReturn(composed);
 
@@ -76,9 +82,44 @@ class AssistantAgentServiceTest {
 
         assertThat(turn.composedAnswer().answer()).isEqualTo("知识库证据不足");
         verify(plannerFacade).plan(context.toPlannerInput());
-        verify(orchestrator).executePlan(user, planned);
+        verify(stateMachine).start(user, session, planned);
         verify(ragComposer).compose("七天无理由怎么退货", retrieval);
         verify(answerComposer).compose(context, execution, ragAnswer);
+    }
+
+    @Test
+    void resumesPersistedRunWithoutCallingPlannerAgain() {
+        AssistantContextBuilder contextBuilder = mock(AssistantContextBuilder.class);
+        PlannerFacade plannerFacade = mock(PlannerFacade.class);
+        ConversationPlanResolver resolver = mock(ConversationPlanResolver.class);
+        RagAnswerComposer ragComposer = mock(RagAnswerComposer.class);
+        AssistantAnswerComposer answerComposer = mock(AssistantAnswerComposer.class);
+        AssistantStateMachine stateMachine = mock(AssistantStateMachine.class);
+        AssistantAgentService service = new AssistantAgentService(
+                contextBuilder, plannerFacade, resolver, ragComposer, answerComposer, stateMachine);
+        AppUser user = new AppUser();
+        user.setId(1L);
+        AssistantSession session = new AssistantSession();
+        session.setId(2L);
+        AssistantContext context = new AssistantContext(
+                "确认执行", null, List.of(), List.of(), "取消订单", null, 20, 2_000, false);
+        PlannerResult planner = planner();
+        ToolPlanExecutionResult execution = new ToolPlanExecutionResult(planner, List.of());
+        StateMachineExecution workflow = new StateMachineExecution(
+                9L, AgentRunStatus.SUCCEEDED, null, true, execution);
+        AssistantComposedAnswer composed = new AssistantComposedAnswer("订单取消成功", "STRUCTURED_EVIDENCE", List.of());
+        when(stateMachine.findWaiting(user, session)).thenReturn(java.util.Optional.of(
+                new WaitingAgentRun(9L, AgentRunStatus.WAITING_CONFIRMATION, "取消订单", "t1")));
+        when(contextBuilder.build(user, session, "确认执行", "取消订单")).thenReturn(context);
+        when(stateMachine.resume(user, session, "确认执行")).thenReturn(workflow);
+        when(answerComposer.compose(context, execution, null)).thenReturn(composed);
+
+        AssistantAgentTurn turn = service.handle(user, session, "确认执行");
+
+        assertThat(turn.workflow().resumed()).isTrue();
+        assertThat(turn.composedAnswer().answer()).isEqualTo("订单取消成功");
+        verify(stateMachine).resume(user, session, "确认执行");
+        verifyNoInteractions(plannerFacade, resolver, ragComposer);
     }
 
     private PlannerResult planner() {

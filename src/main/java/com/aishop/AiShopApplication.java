@@ -6,10 +6,16 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 
 import com.aishop.config.RagProperties;
 import com.aishop.config.AssistantContextProperties;
+import com.aishop.config.AssistantStateProperties;
 import com.aishop.config.ShopProperties;
 
 @SpringBootApplication
-@EnableConfigurationProperties({ShopProperties.class, RagProperties.class, AssistantContextProperties.class})
+@EnableConfigurationProperties({
+        ShopProperties.class,
+        RagProperties.class,
+        AssistantContextProperties.class,
+        AssistantStateProperties.class
+})
 public class AiShopApplication {
 
     public static void main(String[] args) {

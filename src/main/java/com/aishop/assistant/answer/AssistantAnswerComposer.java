@@ -74,7 +74,13 @@ public class AssistantAnswerComposer {
             return "操作未完成：" + safeText(result.message(), "工具校验失败") + "。";
         }
         if (result.status() == ToolExecutionStatus.SKIPPED_DEPENDENCY) {
-            return "后续任务未执行：它依赖的前置任务没有成功。";
+            return safeText(result.message(), "后续任务未执行：依赖或执行条件未满足。");
+        }
+        if (result.status() == ToolExecutionStatus.REJECTED) {
+            return "已取消本次待确认操作，没有修改业务数据。";
+        }
+        if (result.status() == ToolExecutionStatus.EXPIRED) {
+            return "等待已超时，本次计划已经过期，请重新发起请求。";
         }
         if (result.status() == ToolExecutionStatus.NOT_SUPPORTED) {
             return isAnswerOnlyAction(result.action())
@@ -110,7 +116,8 @@ public class AssistantAnswerComposer {
         String effect = preview.path("effect").asText("");
         String suffix = effect.isBlank() ? "" : " 预计效果：" + effect + "。";
         return "已完成 " + actionLabel(result.action()) + " 的前置校验，目标是 " + target
-                + "。该动作需要二次确认，目前尚未执行。" + suffix;
+                + "。该动作需要二次确认，目前尚未执行。" + suffix
+                + "请回复“确认执行”或“取消操作”。";
     }
 
     private String orderAnswer(Map<String, Object> data) {
