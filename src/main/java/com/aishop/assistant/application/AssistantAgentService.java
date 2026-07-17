@@ -1,7 +1,11 @@
 package com.aishop.assistant.application;
 
+import java.util.List;
+import java.util.UUID;
+
 import org.springframework.stereotype.Service;
 
+import com.aishop.assistant.answer.AssistantComposedAnswer;
 import com.aishop.assistant.answer.AssistantAnswerComposer;
 import com.aishop.assistant.context.AssistantContext;
 import com.aishop.assistant.context.AssistantContextBuilder;
@@ -44,22 +48,88 @@ public class AssistantAgentService {
     }
 
     public AssistantAgentTurn handle(AppUser user, AssistantSession session, String message) {
+        long startedAt = System.nanoTime();
         var waiting = stateMachine.findWaiting(user, session);
         String unfinishedPlanSummary = waiting.map(value -> value.planSummary()).orElse(null);
         AssistantContext context = contextBuilder.build(
                 user, session, message, unfinishedPlanSummary);
         StateMachineExecution workflow;
+        long planningLatencyMs = 0;
+        long executionLatencyMs;
         if (waiting.isPresent()) {
+            long executionStartedAt = System.nanoTime();
             workflow = stateMachine.resume(user, session, message);
+            executionLatencyMs = elapsedMs(executionStartedAt);
         } else {
+            long planningStartedAt = System.nanoTime();
             var planned = plannerFacade.plan(context.toPlannerInput());
             var resolvedPlan = planResolver.resolve(context, planned);
+            planningLatencyMs = elapsedMs(planningStartedAt);
+            long executionStartedAt = System.nanoTime();
             workflow = stateMachine.start(user, session, resolvedPlan);
+            executionLatencyMs = elapsedMs(executionStartedAt);
         }
         ToolPlanExecutionResult execution = workflow.execution();
+        long answerStartedAt = System.nanoTime();
         RagAnswerResult ragAnswer = composeRagAnswer(execution);
         var answer = answerComposer.compose(context, execution, ragAnswer);
-        return new AssistantAgentTurn(context, execution, ragAnswer, answer, workflow);
+        long answerLatencyMs = elapsedMs(answerStartedAt);
+        AgentTrace trace = trace(
+                session, workflow, execution, ragAnswer, answer,
+                elapsedMs(startedAt), planningLatencyMs, executionLatencyMs, answerLatencyMs);
+        return new AssistantAgentTurn(context, execution, ragAnswer, answer, workflow, trace);
+    }
+
+    private AgentTrace trace(AssistantSession session,
+                             StateMachineExecution workflow,
+                             ToolPlanExecutionResult execution,
+                             RagAnswerResult ragAnswer,
+                             AssistantComposedAnswer answer,
+                             long totalLatencyMs,
+                             long planningLatencyMs,
+                             long executionLatencyMs,
+                             long answerLatencyMs) {
+        var planner = execution.planner();
+        List<AgentTaskTrace> tasks = execution.taskResults().stream()
+                .map(result -> new AgentTaskTrace(
+                        result.taskId(),
+                        result.action().name(),
+                        result.toolName(),
+                        result.status().name(),
+                        result.targetRef(),
+                        clip(result.message(), 160)))
+                .toList();
+        return new AgentTrace(
+                "agent-" + UUID.randomUUID(),
+                session.getId(),
+                workflow.planRunId(),
+                workflow.resumed(),
+                planner.source().name(),
+                planner.fallbackReason() == null ? null : planner.fallbackReason().name(),
+                planner.modelName(),
+                planner.inputTokens(),
+                planner.outputTokens(),
+                totalLatencyMs,
+                planningLatencyMs,
+                executionLatencyMs,
+                answerLatencyMs,
+                tasks.size(),
+                tasks,
+                ragAnswer == null ? null : ragAnswer.mode().name(),
+                ragAnswer == null ? 0 : ragAnswer.citations().size(),
+                answer.mode(),
+                workflow.status().name());
+    }
+
+    private long elapsedMs(long startedAt) {
+        return Math.max(0, (System.nanoTime() - startedAt) / 1_000_000);
+    }
+
+    private String clip(String value, int maximum) {
+        if (value == null || value.length() <= maximum) {
+            return value;
+        }
+        return value.substring(0, maximum);
     }
 
     private RagAnswerResult composeRagAnswer(ToolPlanExecutionResult execution) {

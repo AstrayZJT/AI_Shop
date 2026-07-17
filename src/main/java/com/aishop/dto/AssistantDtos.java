@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
+import com.aishop.assistant.application.AgentTrace;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -28,7 +29,18 @@ public final class AssistantDtos {
                                String threadId,
                                List<KnowledgeSourceResponse> sources,
                                String pendingOrderDraft,
-                               List<SuggestedActionResponse> suggestedActions) {}
+                               List<SuggestedActionResponse> suggestedActions,
+                               AgentTrace trace) {
+        public ChatResponse(Long sessionId,
+                            String answer,
+                            String intent,
+                            String threadId,
+                            List<KnowledgeSourceResponse> sources,
+                            String pendingOrderDraft,
+                            List<SuggestedActionResponse> suggestedActions) {
+            this(sessionId, answer, intent, threadId, sources, pendingOrderDraft, suggestedActions, null);
+        }
+    }
     public record SessionResponse(Long id,
                                   String title,
                                   String summary,

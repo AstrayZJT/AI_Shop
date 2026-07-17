@@ -10,7 +10,7 @@
 
 ## AI Agent 重写进度
 
-面向 Agent 学习和面试讲解的新链路已完成六个阶段：
+面向 Agent 学习和面试讲解的新链路已完成七个阶段：
 
 - 第一阶段：真实 LLM 结构化 Planner、规则降级、计划校验和语义安全检查。
 - 第二阶段：LangChain4j Function Calling、Tool Registry、四个只读 Tool、取消订单无副作用 prepare，以及多任务工具编排。
@@ -18,6 +18,7 @@
 - 第四阶段：有预算的会话上下文、可信订单事实分层、跨轮订单指代、Planner 参数二次约束、Tool/RAG 结构化回答合成，并接入正式聊天入口。
 - 第五阶段：多任务拓扑排序与冲突分析、白名单条件求值、PlanRun/TaskRun/PendingAction 持久化状态机、缺槽位恢复，以及取消订单二次确认、拒绝和过期处理。
 - 第六阶段：后端 ActionPolicyRegistry、显式 PendingAction 查询/确认/拒绝 API、clientRequestId 幂等、数据库行锁并发保护、执行审计，以及 Prompt Injection 和跨用户越权防护。
+- 第七阶段：建立 57 条 Planner 结构化评测集，统计 intent/action/slots/多任务/依赖/规则兜底指标；新增请求级 Agent trace，返回阶段耗时、Token、任务结果、RAG 模式和最终状态，并准备固定演示场景。
 
 第二阶段提供三个登录后调试接口：
 
@@ -42,7 +43,11 @@ POST /api/assistant/sessions/{sessionId}/pending-actions/{pendingActionId}/rejec
 
 第三阶段真实环境的 5 条固定检索评测均排在第一位，Hit@K 和 MRR 均为 1.0。详细链路参见 `docs/AI Agent第三阶段RAG学习总结.md`。
 
-当前完整自动化测试为 126 条。
+当前完整自动化测试为 127 条。
+
+Planner 评测接口：GET /api/assistant/evaluation/planner?mode=RULE_BASELINE
+
+默认是本地规则基线，不调用远程模型；显式使用 mode=ACTIVE_PLANNER 才会让 57 条样本走当前 Planner，适合在本地或独立评测环境运行。正式聊天响应中的 trace 字段包含 traceId、Planner 来源、阶段耗时、Token、任务 action/tool/status、RAG 模式和最终状态，不包含原始 Prompt、完整工具参数或模型原始输出。
 
 ## 1. 当前架构
 

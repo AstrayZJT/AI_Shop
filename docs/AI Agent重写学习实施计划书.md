@@ -16,6 +16,8 @@
 
 本轮第六阶段 Agent Guardrails 已于 2026-07-16 完成，对应本文“阶段七”：实现后端 ActionPolicyRegistry、PendingAction 查询/确认/拒绝 API、clientRequestId 幂等、`PESSIMISTIC_WRITE` 并发确认保护和统一动作审计；确认时强制复核当前用户、会话、PlanRun 当前任务、动作有效期、订单归属与实时状态。Planner 不可信输入边界升级至 `planner-v1.4`，并补充闭合标签注入、模型伪造订单号、RAG citation 白名单及跨用户攻击测试。完整测试共 126 条。
 
+本轮第七阶段评测与可观测性已于 2026-07-17 完成，对应本文“阶段八”：新增 57 条 `planner-cases.jsonl`，可分别运行规则基线和当前 Planner，统计 intent/action/slots/任务数/多任务/依赖/规则兜底指标；正式聊天响应新增结构化 Agent trace，记录 traceId、Planner 来源、模型 Token、Planner/状态机/回答耗时、任务结果、RAG 模式和最终状态。补充四个固定面试演示场景与评测源码学习文档，完整测试共 127 条。
+
 详细结果参见：
 
 - `docs/AI Agent第一阶段学习总结.md`
@@ -26,8 +28,9 @@
 - `docs/AI Agent第三阶段RAG真实环境验收报告.md`
 - `docs/第五阶段多任务编排与状态机源码学习文档.md`
 - `docs/第六阶段Agent Guardrails源码学习文档.md`
+- `docs/第七阶段评测与可观测性源码学习文档.md`
 
-当前 Planner、Tool、RAG、上下文、持久化状态机和取消订单 Guardrails 已接入正式 `/api/assistant/chat`。尚未投入的是支付、退款、确认收货和改地址等其他写动作的确认执行器，以及完整 Agent 评测与链路观测阶段。
+当前 Planner、Tool、RAG、上下文、持久化状态机、取消订单 Guardrails、离线 Planner 评测和请求级 trace 已接入或可由正式链路使用。尚未投入的是支付、退款、确认收货和改地址等其他写动作的确认执行器，以及生产级分布式 tracing、告警和大规模评测集。
 
 ## 1. 项目重新定位
 
@@ -465,9 +468,11 @@ EXPIRED
 
 ### 5.8 阶段八：评测、可观测性和面试材料
 
+> 状态：已于 2026-07-17 完成，对应本轮 Goal 的“第七阶段”。
+
 #### 要做的事情
 
-1. 建立 `planner-cases.jsonl`，准备 40 到 60 条人工标注意图样本。
+1. 建立 `planner-cases.jsonl`，当前包含 57 条人工标注意图样本。
 2. 统计：
    - intent 准确率。
    - action Exact Match。
@@ -492,6 +497,11 @@ EXPIRED
 - 所有简历指标都能从测试集或运行数据得到。
 - 可以沿着 trace 解释一次请求为什么选择某个工具。
 - 可以现场演示模型失败、RAG 命中、安全拒绝和确认恢复。
+- 规则基线 57 条样本全部通过，intent/action/slots/任务数/多任务/依赖指标均为 1.0，规则兜底率为 1.0；该结果只代表基线和当前小数据集，不代表真实模型线上准确率。
+- `GET /api/assistant/evaluation/planner?mode=RULE_BASELINE` 可重复运行本地基线；`ACTIVE_PLANNER` 作为显式模式运行真实 Planner。
+- `/api/assistant/chat` 响应包含 trace 摘要，日志包含 traceId、Planner 来源、耗时和 Token，不输出原始 Prompt 与完整业务参数。
+- 已准备商品推荐、RAG 组合回答、取消订单确认恢复、模型失败与越权防护四个演示场景。
+- 完整自动化测试 127 条全部通过。
 
 ## 6. LangGraph4j 的安排
 

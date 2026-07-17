@@ -11,5 +11,14 @@ public record AssistantAgentTurn(
         ToolPlanExecutionResult execution,
         RagAnswerResult ragAnswer,
         AssistantComposedAnswer composedAnswer,
-        StateMachineExecution workflow) {
+        StateMachineExecution workflow,
+        AgentTrace trace) {
+
+    public AssistantAgentTurn(AssistantContext context,
+                              ToolPlanExecutionResult execution,
+                              RagAnswerResult ragAnswer,
+                              AssistantComposedAnswer composedAnswer,
+                              StateMachineExecution workflow) {
+        this(context, execution, ragAnswer, composedAnswer, workflow, AgentTrace.empty());
+    }
 }

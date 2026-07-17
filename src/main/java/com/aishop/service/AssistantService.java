@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.aishop.assistant.application.AssistantAgentService;
+import com.aishop.assistant.application.AgentTrace;
 import com.aishop.assistant.context.AssistantContextBuilder;
 import com.aishop.domain.AppUser;
 import com.aishop.domain.AssistantMessage;
@@ -112,12 +113,14 @@ public class AssistantService {
         String answer;
         String intent;
         List<KnowledgeSourceResponse> sources;
+        AgentTrace trace = AgentTrace.empty();
         if (SERVICE_STATUS_ESCALATED.equals(normalizeServiceStatus(session.getServiceStatus()))) {
             answer = "你的会话已经转给人工客服，我会把这条补充信息同步给人工同事，请稍候查看人工回复。";
             intent = "handoff";
             sources = List.of();
         } else {
             var turn = assistantAgentService.handle(user, session, message);
+            trace = turn.trace();
             var primaryTask = turn.execution().planner().plan().tasks().getFirst();
             answer = turn.composedAnswer().answer();
             intent = primaryTask.intent().name().toLowerCase();
@@ -125,10 +128,11 @@ public class AssistantService {
                     ? List.of()
                     : turn.ragAnswer().retrievalHits().stream().map(this::toKnowledgeSourceResponse).toList();
             log.info(
-                    "assistant agent response: sessionId={}, intent={}, plannerSource={}, taskCount={}, planRunId={}, runStatus={}, resumed={}, contextCharacters={}, contextTruncated={}, answerMode={}, sourceCount={}",
-                    session.getId(), intent, turn.execution().planner().source(),
+                    "assistant agent response: traceId={}, sessionId={}, intent={}, plannerSource={}, taskCount={}, planRunId={}, runStatus={}, resumed={}, totalLatencyMs={}, inputTokens={}, outputTokens={}, contextCharacters={}, contextTruncated={}, answerMode={}, sourceCount={}",
+                    trace.traceId(), session.getId(), intent, turn.execution().planner().source(),
                     turn.execution().taskResults().size(), turn.workflow().planRunId(),
-                    turn.workflow().status(), turn.workflow().resumed(), turn.context().estimatedCharacters(),
+                    turn.workflow().status(), turn.workflow().resumed(), trace.totalLatencyMs(),
+                    trace.inputTokens(), trace.outputTokens(), turn.context().estimatedCharacters(),
                     turn.context().truncated(), turn.composedAnswer().mode(), sources.size());
         }
 
@@ -138,7 +142,8 @@ public class AssistantService {
         saveMessage(session, "user", message);
         saveMessage(session, "assistant", answer);
 
-        return new ChatResponse(session.getId(), answer, intent, currentThreadId, sources, null, List.of());
+        return new ChatResponse(
+                session.getId(), answer, intent, currentThreadId, sources, null, List.of(), trace);
     }
 
     @Transactional
