@@ -909,6 +909,7 @@ mvn -q -DskipTests compile
 - AI 客服全链路源码讲解：`docs/AI客服全链路源码讲解.md`
 - AI 客服多步骤任务编排设计书：`docs/AI客服多步骤任务编排设计书.md`
 - AI Agent 重写学习实施计划书：`docs/AI Agent重写学习实施计划书.md`
+- AI Agent 校招面试准备计划：`docs/AI Agent校招面试准备计划.md`
 - AI Agent 第一阶段学习总结：`docs/AI Agent第一阶段学习总结.md`
 - AI Agent 第一阶段真实环境验收报告：`docs/AI Agent第一阶段真实环境验收报告.md`
 - AI Agent 第一阶段 Planner 源码讲解：`docs/AI Agent第一阶段Planner源码讲解.md`
